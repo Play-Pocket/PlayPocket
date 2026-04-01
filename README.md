@@ -1,4 +1,4 @@
-# 🎧 PlayPocket
+# PlayPocket
 
 ![version](https://img.shields.io/github/v/release/Play-Pocket/PlayPocket?label=version)
 ![downloads](https://img.shields.io/github/downloads/Play-Pocket/PlayPocket/total)
