@@ -1,0 +1,2 @@
+# PlayPocket
+PlayPocketは日本製・日本用の安心安全なWindows向け完全オフラインプレイリストアプリです。
