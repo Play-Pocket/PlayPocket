@@ -147,7 +147,7 @@ async function addFiles(files){
     const duration = await getVideoDuration(f);
     const thumb = await generateThumbnail(f);
     const blob = f.slice(0, f.size, f.type);
-    const meta = { id, name: f.name, duration, blob, thumbnail: thumb, lastTime:0, size: f.size };
+    const meta = { id, name: f.name, duration, blob, thumbnail: thumb, size: f.size };
     await idbPut(STORE_VIDEOS, meta);
     videoListCache[id] = meta;
     if(currentPlaylist){
@@ -342,24 +342,22 @@ async function playCurrent(){
 async function loadAndPlayById(id){
   const meta = await idbGet(STORE_VIDEOS, id);
   if(!meta) { console.warn('missing video', id); return; }
+  if(!meta.blob){
+    console.warn('missing blob for', id);
+    return;
+  }
   const url = URL.createObjectURL(meta.blob);
   videoPlayer.src = url;
   videoPlayer.playbackRate = parseFloat(speedSelect.value);
   const vol = parseFloat(localStorage.getItem('playerVolume') || '1');
   videoPlayer.volume = vol;
-  videoPlayer.currentTime = meta.lastTime || 0;
-  videoPlayer.play().catch(()=>{});
+  try { await videoPlayer.play(); } catch(e){}
   videoPlayer.onended = async () => {
     if(playMode === 'order' || playMode === 'shuffle'){
       currentIndex = (currentIndex + 1) % (await getPlaylistLength());
     }
     await playCurrent();
   };
-  videoPlayer.ontimeupdate = throttle(async () => {
-    const t = videoPlayer.currentTime;
-    meta.lastTime = t;
-    await idbPut(STORE_VIDEOS, meta);
-  }, 1000);
 }
 
 function throttle(fn, wait){
@@ -526,12 +524,12 @@ importFile.addEventListener('change', async (e) => {
       if(it.blobBase64){
         const blob = base64ToBlob(it.blobBase64, 'video/mp4');
         const id = it.id || uid();
-        const meta = { id, name: it.name || 'video', duration: it.duration || 0, blob, thumbnail: it.thumbnail || null, lastTime:0, size: it.size || 0 };
+        const meta = { id, name: it.name || 'video', duration: it.duration || 0, blob, thumbnail: it.thumbnail || null, size: it.size || 0 };
         await idbPut(STORE_VIDEOS, meta);
         items.push(id);
       } else {
         const id = it.id || uid();
-        const meta = { id, name: it.name || 'video', duration: it.duration || 0, blob: null, thumbnail: it.thumbnail || null, lastTime:0, size: it.size || 0 };
+        const meta = { id, name: it.name || 'video', duration: it.duration || 0, blob: null, thumbnail: it.thumbnail || null, size: it.size || 0 };
         await idbPut(STORE_VIDEOS, meta);
         items.push(id);
       }
