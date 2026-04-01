@@ -1,2 +1,51 @@
-# PlayPocket
-PlayPocketは日本製・日本用の安心安全なWindows向け完全オフラインプレイリストアプリです。
+# 🎧 PlayPocket
+
+![version](https://img.shields.io/github/v/release/Play-Pocket/PlayPocket?label=version)
+![downloads](https://img.shields.io/github/downloads/Play-Pocket/PlayPocket/total)
+![license](https://img.shields.io/github/license/Play-Pocket/PlayPocket)
+![platform](https://img.shields.io/badge/platform-Windows-blue)
+![made-with](https://img.shields.io/badge/Made%20with-Electron-9feaf9)
+
+---
+
+PlayPocket は、Windows向けの軽量オフラインプレイリストアプリです。
+シンプルで高速、直感的な操作が可能です。
+
+---
+
+## ダウンロード
+
+[![Download](https://img.shields.io/badge/Download-PlayPocket-success?style=for-the-badge\&logo=windows)](https://github.com/Play-Pocket/PlayPocket/releases)
+
+---
+
+## 特徴
+
+* ローカル音楽ファイル対応
+* 軽量・高速
+* シンプルUI
+* プレイリスト管理
+* シャッフル・リピート
+
+---
+
+## インストール
+
+1. 上のダウンロードボタンをクリック
+2. `.exe` を実行
+3. インストール
+
+---
+
+## 開発
+
+```bash
+npm install
+npm start
+```
+
+---
+
+## 📜 ライセンス
+
+MIT License
