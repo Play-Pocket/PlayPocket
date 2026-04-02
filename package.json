@@ -1,6 +1,6 @@
 {
   "name": "PlayPocket",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Offline playlist player (PlayPocket)",
   "main": "main.js",
   "scripts": {
@@ -74,5 +74,8 @@
         "repo": "PlayPocket"
       }
     ]
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1"
   }
 }
