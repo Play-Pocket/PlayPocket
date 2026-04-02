@@ -1,10 +1,16 @@
 const { app, BrowserWindow, Menu, ipcMain, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const RPC = require("discord-rpc");
+
+const DISCORD_CLIENT_ID = "1489154338705375242";
+
+let rpc = null;
+let mainWindow = null;
 
 const APP_ID = 'io.github.takkunlego0916.playpocket';
 if (process.platform === 'win32') {
-  try { app.setAppUserModelId(APP_ID); } catch (e) { /* ignore */ }
+  try { app.setAppUserModelId(APP_ID); } catch (e) {}
 }
 
 app.commandLine.appendSwitch('disable-gpu');
@@ -15,72 +21,43 @@ try {
   app.setPath('userData', safeUserData);
   app.commandLine.appendSwitch('disk-cache-dir', path.join(safeUserData, 'Cache'));
 } catch (e) {
-  console.warn('Failed to set safe userData path:', e);
+  console.warn("userData設定失敗:", e);
 }
-
-let mainWindow = null;
 
 function createWindow() {
   const icoPath = path.join(__dirname, 'app', 'icons', 'appIcon.ico');
   const pngPath = path.join(__dirname, 'app', 'icons', 'appIcon.png');
+
   let icon;
-  if (fs.existsSync(icoPath)) {
-    icon = nativeImage.createFromPath(icoPath);
-  } else if (fs.existsSync(pngPath)) {
-    icon = nativeImage.createFromPath(pngPath);
-  } else {
-    icon = undefined;
-  }
+  if (fs.existsSync(icoPath)) icon = nativeImage.createFromPath(icoPath);
+  else if (fs.existsSync(pngPath)) icon = nativeImage.createFromPath(pngPath);
 
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    center: true,
     show: false,
     autoHideMenuBar: true,
-    frame: true,
     icon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false,
-      enableRemoteModule: false
+      nodeIntegration: false
     }
   });
 
-  try {
-    Menu.setApplicationMenu(null);
-    mainWindow.setMenuBarVisibility(false);
-  } catch (e) {
-    console.warn('Failed to remove application menu:', e);
-  }
+  Menu.setApplicationMenu(null);
 
-  try {
-    const indexPath = path.resolve(__dirname, 'app', 'index.html');
-    console.log('Attempting to load index at:', indexPath);
-    if (!fs.existsSync(indexPath)) {
-      console.error('index.html not found at', indexPath);
-      mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<h2>index.html が見つかりません</h2><p>app/index.html を配置してください。</p>'));
-    } else {
-      const fileUrl = `file://${indexPath.replace(/\\/g, '/')}`;
-      mainWindow.loadURL(encodeURI(fileUrl)).catch(err => {
-        console.error('Failed to load index.html via loadURL:', err);
-        mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<h2>読み込みエラー</h2><pre>' + String(err) + '</pre>'));
-      });
-    }
-  } catch (e) {
-    console.error('Error while loading index.html:', e);
-  }
-
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  const indexPath = path.resolve(__dirname, 'app', 'index.html');
+  if (!fs.existsSync(indexPath)) {
+    mainWindow.loadURL('data:text/html,<h2>index.htmlが無い</h2>');
+  } else {
+    mainWindow.loadURL(`file://${indexPath.replace(/\\/g, '/')}`);
   }
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    mainWindow.focus();
   });
 
   mainWindow.on('closed', () => {
@@ -88,21 +65,83 @@ function createWindow() {
   });
 }
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+function initRPC() {
+  rpc = new RPC.Client({ transport: "ipc" });
+
+  rpc.on("ready", () => {
+    console.log("Discord RPC Ready");
   });
+
+  rpc.on("disconnected", () => {
+    console.log("RPC disconnected → 再接続");
+    setTimeout(() => {
+      rpc.login({ clientId: DISCORD_CLIENT_ID }).catch(console.error);
+    }, 5000);
+  });
+
+  rpc.login({ clientId: DISCORD_CLIENT_ID }).catch(console.error);
 }
+
+ipcMain.on("set-rpc", (_, data = {}) => {
+  if (!rpc) return;
+
+  try {
+    const now = Date.now();
+
+    rpc.setActivity({
+      details: data.title || "再生中",
+      state: data.playlist || "PlayPocket",
+
+      startTimestamp: data.startTimestamp || now,
+      endTimestamp: data.endTimestamp || undefined,
+
+      largeImageKey: "app",
+      largeImageText: "PlayPocket",
+
+      smallImageKey: data.paused ? "pause" : "play",
+      smallImageText: data.paused ? "一時停止" : "再生中",
+
+      instance: false
+    });
+
+  } catch (e) {
+    console.error("RPC error:", e);
+  }
+});
+
+ipcMain.on("clear-rpc", () => {
+  if (!rpc) return;
+  try {
+    rpc.clearActivity();
+  } catch (e) {
+    console.error("RPC clear error:", e);
+  }
+});
+
+app.whenReady().then(() => {
+  initRPC();
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('before-quit', () => {
+  if (rpc) {
+    try {
+      rpc.clearActivity();
+    } catch (e) {}
+  }
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
 
 ipcMain.handle('read-file', async (_, relativePath) => {
   try {
-    const base = path.join(app.getPath('userData'));
+    const base = app.getPath('userData');
     const full = path.resolve(base, relativePath);
     if (!full.startsWith(path.resolve(base))) throw new Error('Access denied');
     return fs.readFileSync(full, 'utf8');
@@ -114,7 +153,7 @@ ipcMain.handle('read-file', async (_, relativePath) => {
 
 ipcMain.handle('write-file', async (_, relativePath, data) => {
   try {
-    const base = path.join(app.getPath('userData'));
+    const base = app.getPath('userData');
     const full = path.resolve(base, relativePath);
     if (!full.startsWith(path.resolve(base))) throw new Error('Access denied');
     fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -137,27 +176,10 @@ ipcMain.handle('get-app-paths', () => {
   };
 });
 
-app.whenReady().then(() => {
-  console.log('__dirname =', __dirname);
-  console.log('process.cwd() =', process.cwd());
-  console.log('app.getPath(userData) =', app.getPath('userData'));
-
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
 });
+
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
