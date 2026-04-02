@@ -29,6 +29,11 @@ const exportMetaBtn = document.getElementById('exportMetaBtn');
 const exportWithBlobsBtn = document.getElementById('exportWithBlobsBtn');
 const importFile = document.getElementById('importFile');
 
+async function loadAllPlaylists(){
+  const pls = await idbGetAll(STORE_PLAYLISTS);
+  return pls;
+}
+
 function openDB(){
   return new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -168,10 +173,6 @@ async function addFiles(files){
   updateTotalDuration();
 }
 
-async function loadAllPlaylists(){
-  const pls = await idbGetAll(STORE_PLAYLISTS);
-  return pls;
-}
 async function refreshPlaylistsUI(){
   playlistsEl.innerHTML = '';
   const pls = await loadAllPlaylists();
@@ -341,21 +342,32 @@ async function playCurrent(){
 
 async function loadAndPlayById(id){
   const meta = await idbGet(STORE_VIDEOS, id);
-  if(!meta) { console.warn('missing video', id); return; }
-  if(!meta.blob){
-    console.warn('missing blob for', id);
-    return;
-  }
+  if(!meta) return;
+  if(!meta.blob) return;
+
   const url = URL.createObjectURL(meta.blob);
   videoPlayer.src = url;
   videoPlayer.playbackRate = parseFloat(speedSelect.value);
+
   const vol = parseFloat(localStorage.getItem('playerVolume') || '1');
   videoPlayer.volume = vol;
+
   try { await videoPlayer.play(); } catch(e){}
+
+  if (window.electronAPI) {
+    const cleanTitle = meta.name.replace(/\.[^/.]+$/, "");
+
+    window.electronAPI.setRPC({
+      title: cleanTitle,
+      playlist: currentPlaylist,
+      startTimestamp: Date.now(),
+      endTimestamp: Date.now() + (meta.duration * 1000),
+      paused: false
+    });
+  }
+
   videoPlayer.onended = async () => {
-    if(playMode === 'order' || playMode === 'shuffle'){
-      currentIndex = (currentIndex + 1) % (await getPlaylistLength());
-    }
+    currentIndex = (currentIndex + 1) % (await getPlaylistLength());
     await playCurrent();
   };
 }
@@ -374,7 +386,17 @@ async function getPlaylistLength(){
 }
 
 playPauseBtn.addEventListener('click', () => {
-  if(videoPlayer.paused) videoPlayer.play(); else videoPlayer.pause();
+  if(videoPlayer.paused){
+    videoPlayer.play();
+  } else {
+    videoPlayer.pause();
+
+    if (window.electronAPI) {
+      window.electronAPI.setRPC({
+        paused: true
+      });
+    }
+  }
 });
 prevBtn.addEventListener('click', async () => {
   if(playMode === 'random'){ await playCurrent(); return; }
@@ -613,3 +635,21 @@ videoPlayer.addEventListener('play', async () => {
     videoPlayer.pause();
   }
 });
+
+const menuToggle = document.getElementById('menuToggle');
+const sidebar = document.querySelector('.sidebar');
+const overlay = document.getElementById('overlay');
+
+if(menuToggle){
+  menuToggle.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('active');
+  });
+}
+
+if(overlay){
+  overlay.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('active');
+  });
+}
