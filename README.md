@@ -25,6 +25,9 @@ PlayPocket は、Windows/Android向けの軽量オフラインプレイリスト
 * シンプルUI
 * プレイリスト管理
 * シャッフル・リピート
+* DiscordRPC対応
+* オフライン対応
+* Windows/Android OS対応
 
 ---
 
@@ -55,3 +58,12 @@ npm start
 ## ライセンス
 
 MIT License
+
+---
+
+## 作成
+
+* Owner
+  TakkunMC
+  
+* Dev
