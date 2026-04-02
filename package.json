@@ -20,6 +20,9 @@
     "directories": {
       "output": "dist"
     },
+    "asarUnpack": [
+      "node_modules/discord-rpc/**/*"
+    ],
     "files": [
       "app/**/*",
       "main.js",
