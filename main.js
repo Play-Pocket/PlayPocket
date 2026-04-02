@@ -18,7 +18,6 @@ app.commandLine.appendSwitch('disable-gpu-compositing');
 
 try {
   const safeUserData = path.join(app.getPath('appData'), 'PlayPocket');
-  app.setPath('userData', safeUserData);
   app.commandLine.appendSwitch('disk-cache-dir', path.join(safeUserData, 'Cache'));
 } catch (e) {
   console.warn("userData設定失敗:", e);
@@ -90,16 +89,13 @@ ipcMain.on("set-rpc", (_, data = {}) => {
 
     rpc.setActivity({
       details: data.title || "再生中",
-      state: data.playlist || "PlayPocket",
+      state: data.playlist || "PlayPocketで再生中",
 
       startTimestamp: data.startTimestamp || now,
       endTimestamp: data.endTimestamp || undefined,
 
       largeImageKey: "app",
       largeImageText: "PlayPocket",
-
-      smallImageKey: data.paused ? "pause" : "play",
-      smallImageText: data.paused ? "一時停止" : "再生中",
 
       instance: false
     });
@@ -117,6 +113,7 @@ ipcMain.on("clear-rpc", () => {
     console.error("RPC clear error:", e);
   }
 });
+
 
 app.whenReady().then(() => {
   initRPC();
@@ -175,6 +172,7 @@ ipcMain.handle('get-app-paths', () => {
     documents: app.getPath('documents')
   };
 });
+
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
