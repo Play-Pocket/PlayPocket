@@ -8,14 +8,14 @@
 
 ---
 
-PlayPocket は、Windows向けの軽量オフラインプレイリストアプリです。
+PlayPocket は、Windows/Android向けの軽量オフラインプレイリストアプリです。
 シンプルで高速、直感的な操作が可能です。
 
 ---
 
 ## ダウンロード
 
-[![Download](https://img.shields.io/badge/Download-PlayPocket-success?style=for-the-badge\&logo=windows)](https://github.com/Play-Pocket/PlayPocket/releases)
+[![Download](https://img.shields.io/badge/Download-PlayPocket-success?style=for-the-badge\&logo=windows)](https://github.com/Play-Pocket/PlayPocket/releases/latest)
 
 ---
 
@@ -31,9 +31,16 @@ PlayPocket は、Windows向けの軽量オフラインプレイリストアプ�
 
 ## インストール
 
+### Windows
 1. 上のダウンロードボタンをクリック
-2. `.exe` を実行
+2. `PlayPocket Setup 1.0.2.exe` を実行
 3. インストール
+
+### Android
+1. 上のダウンロードボタンをクリック
+2. `PlayPocket Setup 1.0.2.apk` を実行
+3. インストール
+
 
 ---
 
