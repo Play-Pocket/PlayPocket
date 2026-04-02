@@ -1,10 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('api', {
+contextBridge.exposeInMainWorld('electronAPI', {
+  setRPC: (data) => ipcRenderer.send('set-rpc', data),
+  clearRPC: () => ipcRenderer.send('clear-rpc'),
+
   readFile: (path) => ipcRenderer.invoke('read-file', path),
   writeFile: (path, data) => ipcRenderer.invoke('write-file', path, data)
-});
-
-contextBridge.exposeInMainWorld('electronAPI', {
-  setRPC: (data) => ipcRenderer.send('set-rpc', data)
 });
