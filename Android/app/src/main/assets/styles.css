@@ -6,10 +6,12 @@
   --text:#fff;
   --sidebar-width:280px;
   --topbar-height:64px;
-  font-family: "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  font-family:"Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
 }
 
-*{ box-sizing:border-box; }
+*{
+  box-sizing:border-box;
+}
 
 html,body,#app{
   height:100%;
@@ -21,6 +23,7 @@ html,body,#app{
 body{
   overflow:hidden;
   -webkit-text-size-adjust:100%;
+  -webkit-tap-highlight-color:transparent;
 }
 
 #app{
@@ -105,12 +108,18 @@ body{
   cursor:pointer;
   border:none;
   width:100%;
+  text-decoration:none;
+  user-select:none;
 }
 
 .btn.small{
   padding:6px;
   font-size:13px;
   width:auto;
+}
+
+.file-label{
+  width:100%;
 }
 
 .export-row{
@@ -198,7 +207,6 @@ body{
   min-height:0;
 }
 
-/* Video */
 #videoPlayer{
   width:100%;
   aspect-ratio:16 / 9;
@@ -302,6 +310,14 @@ body{
   white-space:nowrap;
 }
 
+.small-btn:hover,
+.btn:hover,
+.playlist-controls button:hover,
+.player-controls button:hover,
+.modes .mode:hover{
+  filter:brightness(1.08);
+}
+
 .playlist-item{
   display:flex;
   justify-content:space-between;
@@ -327,7 +343,10 @@ body{
   padding-right:8px;
 }
 
-.track-item.dragging{ opacity:0.5; }
+.track-item.dragging{
+  opacity:0.5;
+}
+
 .track-item.drag-over{
   outline:2px dashed rgba(255,255,255,0.06);
   background:rgba(255,255,255,0.01);
@@ -354,6 +373,32 @@ body{
   border-radius:6px;
 }
 
+.visually-hidden{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+}
+
+.menu-btn{
+  display:none;
+  font-size:20px;
+  background:none;
+  border:none;
+  color:var(--text);
+  cursor:pointer;
+  padding:4px 8px;
+}
+
+.overlay{
+  display:none;
+}
+
 /* Android / portrait */
 @media (orientation: portrait), (max-width: 900px){
   body{
@@ -365,12 +410,43 @@ body{
     min-height:100dvh;
   }
 
+  .menu-btn{
+    display:block;
+  }
+
   .sidebar{
-    width:100%;
-    max-height:34vh;
-    border-right:none;
-    border-bottom:1px solid rgba(255,255,255,0.03);
+    position:fixed;
+    top:0;
+    left:0;
+    height:100dvh;
+    width:80%;
+    max-width:320px;
+    z-index:1000;
+    transform:translateX(-100%);
+    transition:transform 0.3s ease;
+    border-right:1px solid rgba(255,255,255,0.03);
+    border-bottom:none;
     padding:12px;
+  }
+
+  .sidebar.open{
+    transform:translateX(0);
+  }
+
+  .overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.5);
+    z-index:999;
+    opacity:0;
+    pointer-events:none;
+    transition:0.3s;
+    display:block;
+  }
+
+  .overlay.active{
+    opacity:1;
+    pointer-events:auto;
   }
 
   .main{
@@ -478,64 +554,5 @@ body{
 
   .small-btn{
     padding:6px 8px;
-  }
-}
-
-.visually-hidden{
-  position:absolute;
-  width:1px;
-  height:1px;
-  padding:0;
-  margin:-1px;
-  overflow:hidden;
-  clip:rect(0,0,0,0);
-  white-space:nowrap;
-  border:0;
-}
-
-.menu-btn{
-  display:none;
-  font-size:20px;
-  background:none;
-  border:none;
-  color:var(--text);
-  cursor:pointer;
-}
-
-@media (orientation: portrait), (max-width: 900px){
-
-  .menu-btn{
-    display:block;
-  }
-
-  .sidebar{
-    position:fixed;
-    top:0;
-    left:0;
-    height:100dvh;
-    width:80%;
-    max-width:320px;
-    z-index:1000;
-    transform:translateX(-100%);
-    transition:transform 0.3s ease;
-  }
-
-  .sidebar.open{
-    transform:translateX(0);
-  }
-
-  .overlay{
-    position:fixed;
-    inset:0;
-    background:rgba(0,0,0,0.5);
-    z-index:999;
-    opacity:0;
-    pointer-events:none;
-    transition:0.3s;
-  }
-
-  .overlay.active{
-    opacity:1;
-    pointer-events:auto;
   }
 }
