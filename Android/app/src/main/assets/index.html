@@ -2,7 +2,18 @@
 <html lang="ja">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self' blob: data:;
+    img-src 'self' blob: data:;
+    media-src 'self' blob: data:;
+    style-src 'self' 'unsafe-inline';
+    script-src 'self';
+    connect-src 'self';
+    object-src 'none';
+    base-uri 'none';
+    form-action 'none'
+  ">
     <title>PlayPocket</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
@@ -12,34 +23,35 @@
         <div class="brand">PlayPocket</div>
 
         <div class="playlist-controls">
-            <input id="newPlaylistName" placeholder="新しいプレイリスト名" aria-label="新しいプレイリスト名" />
-            <button id="createPlaylistBtn" class="btn">作成</button>
+            <input id="newPlaylistName" placeholder="新しいプレイリスト名" aria-label="新しいプレイリスト名" maxlength="80" />
+            <button id="createPlaylistBtn" class="btn" type="button">作成</button>
         </div>
 
         <ul id="playlists" class="playlists" aria-label="プレイリスト一覧"></ul>
 
         <div class="file-controls" aria-label="ファイル操作">
             <input id="fileInput" type="file" accept="video/*" multiple />
-            <label for="fileInput" class="btn">ファイルを追加</label>
+            <label for="fileInput" class="btn file-label">ファイルを追加</label>
             <div id="dropZone" class="drop-zone" aria-hidden="false">ここにドラッグ＆ドロップ</div>
 
             <div class="export-row">
-                <button id="exportMetaBtn" class="btn small">プレイリストをエクスポート</button>
-                <button id="exportWithBlobsBtn" class="btn small">プレイリストをエクスポート（埋め込み）</button>
+                <button id="exportMetaBtn" class="btn small" type="button">プレイリストをエクスポート</button>
+                <button id="exportWithBlobsBtn" class="btn small" type="button">プレイリストをエクスポート（埋め込み）</button>
             </div>
 
             <input id="importFile" type="file" accept=".json" aria-label="プレイリストをインポート" />
+            <label for="importFile" class="btn file-label">プレイリストをインポート</label>
         </div>
     </aside>
 
     <main class="main" role="main">
         <header class="topbar" role="banner">
-            <button id="menuToggle" class="menu-btn">☰</button>
-            <div class="search">PlayPocket 1.0.2</div>
+            <button id="menuToggle" class="menu-btn" type="button" aria-label="メニューを開く">☰</button>
+            <div class="search">PlayPocket 1.1.0</div>
             <div class="modes" role="tablist" aria-label="再生モード">
-                <button id="orderBtn" class="mode active" role="tab" aria-selected="true">追加順</button>
-                <button id="shuffleBtn" class="mode" role="tab" aria-selected="false">シャッフル</button>
-                <button id="randomBtn" class="mode" aria-selected="false">ランダム</button>
+                <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
+                <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
+                <button id="randomBtn" class="mode" aria-selected="false" type="button">ランダム</button>
             </div>
         </header>
 
@@ -48,9 +60,9 @@
                 <video id="videoPlayer" controls preload="metadata" aria-label="ビデオプレーヤー"></video>
 
                 <div class="player-controls" role="toolbar" aria-label="プレーヤーコントロール">
-                    <button id="prevBtn" class="small-btn" aria-label="前のトラック">◀◀</button>
-                    <button id="playPauseBtn" class="small-btn" aria-label="再生/一時停止">▶/Ⅱ</button>
-                    <button id="nextBtn" class="small-btn" aria-label="次のトラック">▶▶</button>
+                    <button id="prevBtn" class="small-btn" aria-label="前のトラック" type="button">◀◀</button>
+                    <button id="playPauseBtn" class="small-btn" aria-label="再生/一時停止" type="button">▶/Ⅱ</button>
+                    <button id="nextBtn" class="small-btn" aria-label="次のトラック" type="button">▶▶</button>
 
                     <label for="speedSelect" class="visually-hidden">再生速度</label>
                     <label class="speed-label">速度
