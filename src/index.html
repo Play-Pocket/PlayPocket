@@ -46,7 +46,7 @@
 
     <main class="main" role="main">
       <header class="topbar" role="banner">
-        <div class="search">PlayPocket 1.2.0</div>
+        <div class="search">PlayPocket 1.2.1</div>
         <div class="modes" role="tablist" aria-label="再生モード">
           <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
           <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
@@ -56,11 +56,22 @@
 
       <section class="player-area" aria-label="プレーヤー領域">
         <div class="player-left">
-          <video id="videoPlayer" controls preload="metadata" aria-label="ビデオプレーヤー"></video>
+          <div class="video-shell">
+            <div class="video-stage paused" id="videoStage">
+              <video id="videoPlayer" preload="metadata" aria-label="ビデオプレーヤー"></video>
+              <button id="centerPlayBtn" class="overlay-play" type="button" aria-label="再生/一時停止">▶</button>
+            </div>
+
+            <div class="seek-row" aria-label="再生位置">
+              <span id="currentTime" class="time-pill">00:00:00</span>
+              <input id="seekBar" type="range" min="0" max="1000" value="0" aria-label="再生位置を変更" />
+              <span id="durationTime" class="time-pill">00:00:00</span>
+            </div>
+          </div>
 
           <div class="player-controls" role="toolbar" aria-label="プレーヤーコントロール">
             <button id="prevBtn" class="small-btn" aria-label="前のトラック" type="button">◀◀</button>
-            <button id="playPauseBtn" class="small-btn" aria-label="再生/一時停止" type="button">▶/Ⅱ</button>
+            <button id="playPauseBtn" class="small-btn" aria-label="再生/一時停止" type="button">▶</button>
             <button id="nextBtn" class="small-btn" aria-label="次のトラック" type="button">▶▶</button>
 
             <label for="speedSelect" class="visually-hidden">再生速度</label>
@@ -74,6 +85,8 @@
                 <option value="2">2x</option>
               </select>
             </label>
+
+            <button id="fullscreenBtn" class="small-btn" type="button" aria-label="全画面表示">⛶</button>
 
             <div class="total-duration" aria-live="polite">合計: <span id="totalDuration">00:00:00</span></div>
           </div>
