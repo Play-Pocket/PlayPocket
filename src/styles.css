@@ -226,13 +226,78 @@ body{
   min-width:0;
 }
 
+.video-shell{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.video-stage{
+  position:relative;
+  background:#000;
+  border-radius:10px;
+  overflow:hidden;
+  box-shadow:0 0 0 1px rgba(255,255,255,0.04) inset;
+}
+
 #videoPlayer{
   width:100%;
   height:min(420px, 60vh);
+  display:block;
   background:#000;
-  border-radius:10px;
   outline:none;
-  box-shadow:0 0 0 1px rgba(255,255,255,0.04) inset;
+  object-fit:contain;
+}
+
+.overlay-play{
+  position:absolute;
+  inset:50% auto auto 50%;
+  transform:translate(-50%, -50%);
+  width:84px;
+  height:84px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,0.14);
+  background:rgba(0,0,0,0.45);
+  color:#fff;
+  font-size:30px;
+  display:grid;
+  place-items:center;
+  cursor:pointer;
+  opacity:0;
+  pointer-events:none;
+  backdrop-filter:blur(6px);
+  transition:opacity .15s ease, transform .15s ease;
+}
+
+.video-stage.paused .overlay-play{
+  opacity:1;
+  pointer-events:auto;
+}
+
+.overlay-play:hover{
+  transform:translate(-50%, -50%) scale(1.04);
+}
+
+.seek-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  border-top:1px solid var(--border-2);
+  background:rgba(255,255,255,0.02);
+  border-radius:0 0 10px 10px;
+}
+
+.seek-row input[type="range"]{
+  width:100%;
+  accent-color:var(--accent);
+}
+
+.time-pill{
+  min-width:72px;
+  font-variant-numeric:tabular-nums;
+  color:var(--muted);
+  font-size:13px;
 }
 
 .player-controls{
