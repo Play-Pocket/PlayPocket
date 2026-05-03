@@ -100,6 +100,11 @@ function sanitizeMimeType(type) {
   return 'video/mp4';
 }
 
+function displayTitle(name) {
+  const text = safeText(name) || 'video';
+  return text.replace(/\.[^/.]+$/, '');
+}
+
 async function openDB() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -290,10 +295,11 @@ async function addFiles(files) {
   if (accepted.length === 0) return;
 
   for (const f of accepted) {
-    const id        = uid();
-    const duration   = await getVideoDuration(f);
-    const thumb      = await generateThumbnail(f);
-    const blob       = f.slice(0, f.size, f.type);
+    const id       = uid();
+    const duration = await getVideoDuration(f);
+    const thumb    = await generateThumbnail(f);
+    const blob     = f.slice(0, f.size, f.type);
+
     const meta = {
       id,
       name: safeText(f.name) || 'video',
@@ -352,14 +358,14 @@ function renderTrackItem(meta, index, isPlaying) {
   img.className      = 'thumb';
   img.alt            = 'サムネイル';
   img.referrerPolicy = 'no-referrer';
-  img.src = sanitizeThumbnail(meta.thumbnail) ?? '';
+  img.src            = sanitizeThumbnail(meta.thumbnail) ?? '';
 
   const metaWrap = document.createElement('div');
   metaWrap.className = 'meta';
 
   const title = document.createElement('div');
   title.className   = 'title';
-  title.textContent = safeText(meta.name) || 'video';
+  title.textContent = displayTitle(meta.name);
 
   const sub = document.createElement('div');
   sub.className = 'sub';
@@ -618,7 +624,7 @@ async function loadAndPlayById(id) {
   updateSeekUI();
 
   if (window.electronAPI?.setRPC) {
-    const cleanTitle = String(meta.name || 'video').replace(/\.[^/.]+$/, '');
+    const cleanTitle = displayTitle(meta.name);
     window.electronAPI.setRPC({
       title:          cleanTitle,
       playlist:       currentPlaylist,
