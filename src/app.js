@@ -32,24 +32,30 @@ let shuffleOrder = [];
 let videoListCache = {};
 let currentObjectUrl = null;
 
-const fileInput        = document.getElementById('fileInput');
-const dropZone         = document.getElementById('dropZone');
-const playlistsEl      = document.getElementById('playlists');
-const newPlaylistName  = document.getElementById('newPlaylistName');
-const createPlaylistBtn = document.getElementById('createPlaylistBtn');
-const trackListEl      = document.getElementById('trackList');
-const videoPlayer      = document.getElementById('videoPlayer');
-const playPauseBtn     = document.getElementById('playPauseBtn');
-const prevBtn          = document.getElementById('prevBtn');
-const nextBtn          = document.getElementById('nextBtn');
-const orderBtn         = document.getElementById('orderBtn');
-const shuffleBtn       = document.getElementById('shuffleBtn');
-const randomBtn        = document.getElementById('randomBtn');
-const speedSelect      = document.getElementById('speedSelect');
-const totalDurationEl  = document.getElementById('totalDuration');
-const exportMetaBtn    = document.getElementById('exportMetaBtn');
-const exportWithBlobsBtn = document.getElementById('exportWithBlobsBtn');
-const importFile       = document.getElementById('importFile');
+const fileInput           = document.getElementById('fileInput');
+const dropZone            = document.getElementById('dropZone');
+const playlistsEl         = document.getElementById('playlists');
+const newPlaylistName     = document.getElementById('newPlaylistName');
+const createPlaylistBtn   = document.getElementById('createPlaylistBtn');
+const trackListEl         = document.getElementById('trackList');
+const videoPlayer         = document.getElementById('videoPlayer');
+const videoStage          = document.getElementById('videoStage');
+const centerPlayBtn       = document.getElementById('centerPlayBtn');
+const seekBar             = document.getElementById('seekBar');
+const currentTimeEl       = document.getElementById('currentTime');
+const durationTimeEl      = document.getElementById('durationTime');
+const playPauseBtn        = document.getElementById('playPauseBtn');
+const prevBtn             = document.getElementById('prevBtn');
+const nextBtn             = document.getElementById('nextBtn');
+const orderBtn            = document.getElementById('orderBtn');
+const shuffleBtn          = document.getElementById('shuffleBtn');
+const randomBtn           = document.getElementById('randomBtn');
+const speedSelect         = document.getElementById('speedSelect');
+const fullscreenBtn       = document.getElementById('fullscreenBtn');
+const totalDurationEl     = document.getElementById('totalDuration');
+const exportMetaBtn       = document.getElementById('exportMetaBtn');
+const exportWithBlobsBtn  = document.getElementById('exportWithBlobsBtn');
+const importFile          = document.getElementById('importFile');
 
 function safeText(value, fallback = '') {
   if (typeof value !== 'string') return fallback;
@@ -237,9 +243,9 @@ async function generateThumbnail(file) {
   return new Promise((res) => {
     const url = URL.createObjectURL(file);
     const v   = document.createElement('video');
-    v.preload    = 'metadata';
-    v.src        = url;
-    v.muted      = true;
+    v.preload     = 'metadata';
+    v.src         = url;
+    v.muted       = true;
     v.playsInline = true;
 
     let settled = false;
@@ -284,18 +290,18 @@ async function addFiles(files) {
   if (accepted.length === 0) return;
 
   for (const f of accepted) {
-    const id       = uid();
-    const duration = await getVideoDuration(f);
-    const thumb    = await generateThumbnail(f);
-    const blob     = f.slice(0, f.size, f.type);
+    const id        = uid();
+    const duration   = await getVideoDuration(f);
+    const thumb      = await generateThumbnail(f);
+    const blob       = f.slice(0, f.size, f.type);
     const meta = {
       id,
-      name:      safeText(f.name) || 'video',
-      duration:  clampNumber(duration, 0),
-      mimeType:  f.type,
+      name: safeText(f.name) || 'video',
+      duration: clampNumber(duration, 0),
+      mimeType: f.type,
       blob,
       thumbnail: thumb,
-      size:      f.size
+      size: f.size
     };
 
     await idbPut(STORE_VIDEOS, meta);
@@ -352,7 +358,7 @@ function renderTrackItem(meta, index, isPlaying) {
   metaWrap.className = 'meta';
 
   const title = document.createElement('div');
-  title.className  = 'title';
+  title.className   = 'title';
   title.textContent = safeText(meta.name) || 'video';
 
   const sub = document.createElement('div');
@@ -367,8 +373,8 @@ function renderTrackItem(meta, index, isPlaying) {
   actions.className = 'track-actions';
 
   const playNowBtn = document.createElement('button');
-  playNowBtn.className  = 'small-btn play-now';
-  playNowBtn.type       = 'button';
+  playNowBtn.className   = 'small-btn play-now';
+  playNowBtn.type        = 'button';
   playNowBtn.textContent = '再生';
 
   const removeBtn = document.createElement('button');
@@ -387,7 +393,7 @@ function renderTrackItem(meta, index, isPlaying) {
     e.dataTransfer.setData('text/plain', String(index));
     li.classList.add('dragging');
   });
-  li.addEventListener('dragend',  () => li.classList.remove('dragging'));
+  li.addEventListener('dragend', () => li.classList.remove('dragging'));
   li.addEventListener('dragover', (e) => { e.preventDefault(); li.classList.add('drag-over'); });
   li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
 
@@ -408,11 +414,12 @@ function renderTrackItem(meta, index, isPlaying) {
     pl.items.splice(toIndex, 0, item);
     await idbPut(STORE_PLAYLISTS, pl);
 
-    if      (currentIndex === fromIndex)                              currentIndex = toIndex;
-    else if (fromIndex < currentIndex && toIndex >= currentIndex)     currentIndex--;
-    else if (fromIndex > currentIndex && toIndex <= currentIndex)     currentIndex++;
+    if      (currentIndex === fromIndex)                          currentIndex = toIndex;
+    else if (fromIndex < currentIndex && toIndex >= currentIndex) currentIndex--;
+    else if (fromIndex > currentIndex && toIndex <= currentIndex) currentIndex++;
 
     await refreshTrackList();
+    updateSeekUI();
   });
 
   playNowBtn.addEventListener('click', async () => {
@@ -432,6 +439,7 @@ function renderTrackItem(meta, index, isPlaying) {
     if (currentIndex >= pl.items.length) currentIndex = Math.max(0, pl.items.length - 1);
     await refreshTrackList();
     await updateTotalDuration();
+    updateSeekUI();
   });
 
   return li;
@@ -461,6 +469,7 @@ async function refreshPlaylistsUI() {
       await refreshPlaylistsUI();
       await refreshTrackList();
       await updateTotalDuration();
+      updateSeekUI();
     });
 
     nameSpan.addEventListener('dblclick', async (e) => {
@@ -501,6 +510,7 @@ async function refreshPlaylistsUI() {
       await refreshPlaylistsUI();
       await refreshTrackList();
       await updateTotalDuration();
+      updateSeekUI();
     });
 
     li.appendChild(nameSpan);
@@ -523,6 +533,7 @@ createPlaylistBtn.addEventListener('click', async () => {
   await refreshPlaylistsUI();
   await refreshTrackList();
   await updateTotalDuration();
+  updateSeekUI();
 });
 
 async function refreshTrackList() {
@@ -549,6 +560,39 @@ function getPlaylistLength(pl) {
   return pl && Array.isArray(pl.items) ? pl.items.length : 0;
 }
 
+function setPlayerUIState() {
+  const paused = videoPlayer.paused || videoPlayer.ended;
+  if (videoStage) videoStage.classList.toggle('paused', paused);
+  if (centerPlayBtn) centerPlayBtn.textContent = paused ? '▶' : 'Ⅱ';
+  if (playPauseBtn) playPauseBtn.textContent = paused ? '▶' : 'Ⅱ';
+}
+
+function updateSeekUI() {
+  const duration = Number.isFinite(videoPlayer.duration) ? videoPlayer.duration : 0;
+  const current  = Number.isFinite(videoPlayer.currentTime) ? videoPlayer.currentTime : 0;
+
+  if (durationTimeEl) durationTimeEl.textContent = formatTime(duration);
+  if (currentTimeEl) currentTimeEl.textContent = formatTime(current);
+
+  if (seekBar && duration > 0) {
+    const ratio = Math.min(1, Math.max(0, current / duration));
+    if (!seekBar.matches(':active')) {
+      seekBar.value = String(Math.round(ratio * 1000));
+    }
+  } else if (seekBar && duration <= 0) {
+    seekBar.value = '0';
+  }
+}
+
+function seekFromBar() {
+  const duration = Number.isFinite(videoPlayer.duration) ? videoPlayer.duration : 0;
+  if (!seekBar || duration <= 0) return;
+
+  const ratio = Math.min(1, Math.max(0, parseFloat(seekBar.value) / 1000));
+  videoPlayer.currentTime = duration * ratio;
+  updateSeekUI();
+}
+
 async function loadAndPlayById(id) {
   const meta = await idbGet(STORE_VIDEOS, id);
   if (!meta || !meta.blob) {
@@ -562,13 +606,16 @@ async function loadAndPlayById(id) {
   }
 
   currentObjectUrl = URL.createObjectURL(meta.blob);
-  videoPlayer.src          = currentObjectUrl;
+  videoPlayer.src = currentObjectUrl;
+  videoPlayer.load();
   videoPlayer.playbackRate = parseFloat(speedSelect.value) || 1;
 
   const vol = parseFloat(localStorage.getItem('playerVolume') || '1');
   videoPlayer.volume = Number.isFinite(vol) ? vol : 1;
 
   try { await videoPlayer.play(); } catch {}
+  setPlayerUIState();
+  updateSeekUI();
 
   if (window.electronAPI?.setRPC) {
     const cleanTitle = String(meta.name || 'video').replace(/\.[^/.]+$/, '');
@@ -646,17 +693,17 @@ function createVolumeControls() {
 
   const saved   = parseFloat(localStorage.getItem('playerVolume') || '1');
   const initVol = Number.isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
-  volSlider.value          = String(initVol);
-  volLabel.textContent     = `${Math.round(initVol * 100)}%`;
-  videoPlayer.volume       = initVol;
-  muteBtn.textContent      = initVol > 0 ? '🔊' : '🔇';
+  volSlider.value      = String(initVol);
+  volLabel.textContent = `${Math.round(initVol * 100)}%`;
+  videoPlayer.volume   = initVol;
+  muteBtn.textContent  = initVol > 0 ? '🔊' : '🔇';
 
   volSlider.addEventListener('input', () => {
     const v = Math.min(1, Math.max(0, parseFloat(volSlider.value) || 0));
     videoPlayer.volume = v;
     localStorage.setItem('playerVolume', String(v));
     volLabel.textContent = `${Math.round(v * 100)}%`;
-    muteBtn.textContent  = v > 0 ? '🔊' : '🔇';
+    muteBtn.textContent   = v > 0 ? '🔊' : '🔇';
   });
 
   muteBtn.addEventListener('click', () => {
@@ -668,8 +715,8 @@ function createVolumeControls() {
       volLabel.textContent   = '0%';
       muteBtn.textContent    = '🔇';
     } else {
-      const prev           = Math.min(1, Math.max(0, parseFloat(volSlider.dataset.prev || '1') || 1));
-      volSlider.value      = String(prev);
+      const prev          = Math.min(1, Math.max(0, parseFloat(volSlider.dataset.prev || '1') || 1));
+      volSlider.value     = String(prev);
       videoPlayer.volume   = prev;
       localStorage.setItem('playerVolume', String(prev));
       volLabel.textContent = `${Math.round(prev * 100)}%`;
@@ -700,6 +747,46 @@ playPauseBtn.addEventListener('click', async () => {
       window.electronAPI.setRPC({ paused: true });
     }
   }
+  setPlayerUIState();
+});
+
+centerPlayBtn?.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (videoPlayer.paused) {
+    try { await videoPlayer.play(); } catch {}
+  } else {
+    videoPlayer.pause();
+  }
+  setPlayerUIState();
+});
+
+videoStage?.addEventListener('click', (e) => {
+  if (e.target === centerPlayBtn) return;
+  if (videoPlayer.paused) {
+    videoPlayer.play().catch(() => {});
+  } else {
+    videoPlayer.pause();
+  }
+  setPlayerUIState();
+});
+
+seekBar?.addEventListener('input', () => {
+  updateSeekUI();
+});
+
+seekBar?.addEventListener('change', () => {
+  seekFromBar();
+});
+
+fullscreenBtn?.addEventListener('click', async () => {
+  try {
+    const target = document.querySelector('.video-shell') || videoStage || document.documentElement;
+    if (!document.fullscreenElement) {
+      await target.requestFullscreen();
+    } else {
+      await document.exitFullscreen();
+    }
+  } catch {}
 });
 
 prevBtn.addEventListener('click', async () => {
@@ -720,7 +807,7 @@ nextBtn.addEventListener('click', async () => {
   await playCurrent();
 });
 
-orderBtn.addEventListener('click',   () => setMode('order'));
+orderBtn.addEventListener('click',  () => setMode('order'));
 shuffleBtn.addEventListener('click', () => setMode('shuffle'));
 randomBtn.addEventListener('click',  () => setMode('random'));
 
@@ -775,13 +862,13 @@ exportWithBlobsBtn.addEventListener('click', async () => {
     if (!meta || !meta.blob) continue;
     const base = await blobToBase64(meta.blob);
     exportObj.items.push({
-      id:          meta.id,
-      name:        meta.name,
-      duration:    meta.duration,
-      mimeType:    meta.mimeType || 'video/mp4',
-      size:        meta.size,
-      thumbnail:   meta.thumbnail,
-      blobBase64:  base
+      id:         meta.id,
+      name:       meta.name,
+      duration:   meta.duration,
+      mimeType:   meta.mimeType || 'video/mp4',
+      size:       meta.size,
+      thumbnail:  meta.thumbnail,
+      blobBase64: base
     });
   }
 
@@ -809,10 +896,10 @@ importFile.addEventListener('change', async (e) => {
     for (const it of obj.items.slice(0, MAX_IMPORTED_ITEMS)) {
       if (!it || typeof it !== 'object') continue;
 
-      const id       = safeText(String(it.id || '')) || uid();
-      const metaName = normalizePlaylistName(it.name) || 'video';
-      const duration = clampNumber(Number(it.duration), 0);
-      const size     = clampNumber(Number(it.size), 0);
+      const id        = safeText(String(it.id || '')) || uid();
+      const metaName  = normalizePlaylistName(it.name) || 'video';
+      const duration  = clampNumber(Number(it.duration), 0);
+      const size      = clampNumber(Number(it.size), 0);
       const thumbnail = sanitizeThumbnail(it.thumbnail);
       const mimeType  = sanitizeMimeType(it.mimeType);
 
@@ -836,11 +923,60 @@ importFile.addEventListener('change', async (e) => {
     await refreshPlaylistsUI();
     await refreshTrackList();
     await updateTotalDuration();
+    updateSeekUI();
   } catch (err) {
     alert('インポートに失敗しました');
   }
 
   importFile.value = '';
+});
+
+videoPlayer.addEventListener('loadedmetadata', () => {
+  updateSeekUI();
+  setPlayerUIState();
+});
+
+videoPlayer.addEventListener('timeupdate', updateSeekUI);
+videoPlayer.addEventListener('durationchange', updateSeekUI);
+
+videoPlayer.addEventListener('ended', async () => {
+  const pl = await getCurrentPlaylist();
+  if (!pl || pl.items.length === 0) return;
+  if (playMode === 'random') { await playCurrent(); return; }
+  currentIndex = (currentIndex + 1) % pl.items.length;
+  await playCurrent();
+});
+
+videoPlayer.addEventListener('play', async () => {
+  const pl = await getCurrentPlaylist();
+  if (!pl || pl.items.length === 0) return;
+  const id   = pl.items[currentIndex];
+  const meta = await idbGet(STORE_VIDEOS, id);
+  if (meta && !meta.blob) {
+    alert('この動画はプレースホルダです。元ファイルを再追加してください。');
+    videoPlayer.pause();
+  }
+  setPlayerUIState();
+  updateSeekUI();
+});
+
+videoPlayer.addEventListener('pause', () => {
+  if (window.electronAPI?.setRPC) {
+    window.electronAPI.setRPC({ paused: true });
+  }
+  setPlayerUIState();
+  updateSeekUI();
+});
+
+videoPlayer.addEventListener('volumechange', () => {
+  const v = Math.min(1, Math.max(0, videoPlayer.volume || 0));
+  localStorage.setItem('playerVolume', String(v));
+});
+
+window.addEventListener('beforeunload', () => {
+  if (currentObjectUrl) {
+    try { URL.revokeObjectURL(currentObjectUrl); } catch {}
+  }
 });
 
 async function init() {
@@ -861,38 +997,9 @@ async function init() {
   await refreshPlaylistsUI();
   await refreshTrackList();
   await updateTotalDuration();
+  setPlayerUIState();
+  updateSeekUI();
 }
-
-videoPlayer.addEventListener('ended', async () => {
-  const pl = await getCurrentPlaylist();
-  if (!pl || pl.items.length === 0) return;
-  if (playMode === 'random') { await playCurrent(); return; }
-  currentIndex = (currentIndex + 1) % pl.items.length;
-  await playCurrent();
-});
-
-videoPlayer.addEventListener('play', async () => {
-  const pl = await getCurrentPlaylist();
-  if (!pl || pl.items.length === 0) return;
-  const id   = pl.items[currentIndex];
-  const meta = await idbGet(STORE_VIDEOS, id);
-  if (meta && !meta.blob) {
-    alert('この動画はプレースホルダです。元ファイルを再追加してください。');
-    videoPlayer.pause();
-  }
-});
-
-videoPlayer.addEventListener('pause', () => {
-  if (window.electronAPI?.setRPC) {
-    window.electronAPI.setRPC({ paused: true });
-  }
-});
-
-window.addEventListener('beforeunload', () => {
-  if (currentObjectUrl) {
-    try { URL.revokeObjectURL(currentObjectUrl); } catch {}
-  }
-});
 
 init().catch(err => {
   console.error(err);
