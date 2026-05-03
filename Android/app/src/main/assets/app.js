@@ -90,8 +90,8 @@ function formatTime(sec) {
 }
 
 function safeThumbnailSrc(src) {
-  if (typeof src !== 'string' || src.length === 0)  return null;
-  if (src.length > MAX_THUMBNAIL_LENGTH)             return null;
+  if (typeof src !== 'string' || src.length === 0) return null;
+  if (src.length > MAX_THUMBNAIL_LENGTH) return null;
   for (const prefix of ALLOWED_THUMB_PREFIXES) {
     if (src.startsWith(prefix)) return src;
   }
@@ -101,6 +101,11 @@ function safeThumbnailSrc(src) {
 function sanitizeMimeType(type) {
   if (typeof type === 'string' && ALLOWED_VIDEO_TYPES.has(type)) return type;
   return 'video/mp4';
+}
+
+function displayTitle(name) {
+  const text = safeText(name) || 'video';
+  return text.replace(/\.[^/.]+$/, '');
 }
 
 async function openDB() {
@@ -363,7 +368,8 @@ function renderTrackItem(meta, index, isPlaying) {
 
   const metaWrap = document.createElement('div'); metaWrap.className = 'meta';
   const title    = document.createElement('div'); title.className = 'title';
-  title.textContent = safeText(meta.name) || 'video';
+  title.textContent = displayTitle(meta.name);
+
   const sub = document.createElement('div'); sub.className = 'sub';
   const sizeMB = Number.isFinite(meta.size) ? Math.round(meta.size / 1024 / 1024) : 0;
   sub.textContent = `${formatTime(meta.duration)} • ${sizeMB} MB`;
@@ -510,7 +516,7 @@ async function loadAndPlayById(id) {
   setPlayerUIState(); updateSeekUI();
 
   if (window.electronAPI?.setRPC) {
-    const cleanTitle = String(meta.name || 'video').replace(/\.[^/.]+$/, '');
+    const cleanTitle = displayTitle(meta.name);
     window.electronAPI.setRPC({
       title:          cleanTitle,
       playlist:       currentPlaylist,
@@ -673,8 +679,14 @@ exportMetaBtn.addEventListener('click', async () => {
   const exportObj = { name: pl.name, items: [] };
   for (const id of pl.items) {
     const meta = await idbGet(STORE_VIDEOS, id); if (!meta) continue;
-    exportObj.items.push({ id: meta.id, name: meta.name, duration: meta.duration,
-      mimeType: meta.mimeType || 'video/mp4', size: meta.size, thumbnail: meta.thumbnail });
+    exportObj.items.push({
+      id: meta.id,
+      name: meta.name,
+      duration: meta.duration,
+      mimeType: meta.mimeType || 'video/mp4',
+      size: meta.size,
+      thumbnail: meta.thumbnail
+    });
   }
   downloadBlob(new Blob([JSON.stringify(exportObj)], { type: 'application/json' }), `${pl.name}.playlist.json`);
 });
@@ -686,9 +698,15 @@ exportWithBlobsBtn.addEventListener('click', async () => {
   for (const id of pl.items) {
     const meta = await idbGet(STORE_VIDEOS, id); if (!meta || !meta.blob) continue;
     const base = await blobToBase64(meta.blob);
-    exportObj.items.push({ id: meta.id, name: meta.name, duration: meta.duration,
-      mimeType: meta.mimeType || 'video/mp4', size: meta.size,
-      thumbnail: meta.thumbnail, blobBase64: base });
+    exportObj.items.push({
+      id: meta.id,
+      name: meta.name,
+      duration: meta.duration,
+      mimeType: meta.mimeType || 'video/mp4',
+      size: meta.size,
+      thumbnail: meta.thumbnail,
+      blobBase64: base
+    });
   }
   downloadBlob(new Blob([JSON.stringify(exportObj)], { type: 'application/json' }), `${pl.name}.playlist.full.json`);
 });
@@ -724,7 +742,9 @@ importFile.addEventListener('change', async (e) => {
     currentPlaylist = name; currentIndex = 0;
     await refreshPlaylistsUI(); await refreshTrackList();
     await updateTotalDuration(); updateSeekUI();
-  } catch { alert('インポートに失敗しました'); }
+  } catch {
+    alert('インポートに失敗しました');
+  }
   importFile.value = '';
 });
 
