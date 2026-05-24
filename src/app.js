@@ -325,8 +325,6 @@ async function loadAllPlaylists() {
   return Array.isArray(pls) ? pls : [];
 }
 
-// [FIX #3] idbRenamePlaylist を単一トランザクションに統合 — put + delete が別トランザクションだと
-//          クラッシュ時にデータが二重登録されるデータ整合性バグを修正
 async function idbRenamePlaylist(oldName, newName) {
   const safeOld = normalizePlaylistName(oldName);
   const safeNew = normalizePlaylistName(newName);
@@ -355,7 +353,6 @@ async function idbRenamePlaylist(oldName, newName) {
           tx.abort();
           return rej(new Error('exists'));
         }
-        // 同一トランザクション内で put と delete を実行
         store.put({ name: safeNew, items });
         store.delete(safeOld);
       };
@@ -371,7 +368,7 @@ async function idbRenamePlaylist(oldName, newName) {
 
     tx.oncomplete = () => { if (!rejected) res(); };
     tx.onerror = () => { if (!rejected) rej(tx.error || new Error('transaction failed')); };
-    tx.onabort = () => { /* reject は上記ハンドラで処理済み */ };
+    tx.onabort = () => {  };
   });
 }
 
@@ -545,7 +542,6 @@ function getCurrentPlaylist() {
   });
 }
 
-// [FIX #4] 孤立した動画を削除するユーティリティ — 他のどのプレイリストからも参照されていない場合のみ削除
 async function deleteOrphanedVideo(id) {
   if (!id) return;
   const allPlaylists = await loadAllPlaylists();
@@ -648,7 +644,6 @@ function renderTrackItem(meta, index, isPlaying) {
     scheduleRuntimeStateSave();
   });
 
-  // [FIX #4] トラック削除時に孤立Blobを STORE_VIDEOS からも消去してストレージ肥大化を防ぐ
   removeBtn.addEventListener('click', async () => {
     if (!currentPlaylist) return;
     const pl = await getCurrentPlaylist();
@@ -658,7 +653,6 @@ function renderTrackItem(meta, index, isPlaying) {
     pl.items.splice(index, 1);
     await idbPut(STORE_PLAYLISTS, pl);
 
-    // 他のプレイリストで参照されていなければ動画レコードも削除
     if (removedId) {
       await deleteOrphanedVideo(removedId);
     }
@@ -725,18 +719,15 @@ async function refreshPlaylistsUI() {
     delBtn.type = 'button';
     delBtn.textContent = '削除';
 
-    // [FIX #4] プレイリスト削除時に含まれる全動画の孤立Blobをクリーンアップ
     delBtn.addEventListener('click', async (ev) => {
       ev.stopPropagation();
       if (!confirm(`プレイリスト「${name}」を削除しますか？`)) return;
 
-      // 削除前にアイテム一覧を取得
       const targetPl = await idbGet(STORE_PLAYLISTS, name);
       const itemIds = (targetPl && Array.isArray(targetPl.items)) ? targetPl.items.slice() : [];
 
       await idbDelete(STORE_PLAYLISTS, name);
 
-      // 各動画が他のプレイリストから参照されていなければ削除
       for (const id of itemIds) {
         await deleteOrphanedVideo(id);
       }
@@ -892,7 +883,6 @@ async function loadAndPlayById(id, options = {}) {
   }
 
   if (autoplay) {
-    // [FIX #10] play() の失敗をログに残す — AbortError 等を無音で握り潰さない
     try {
       await videoPlayer.play();
     } catch (err) {
@@ -965,12 +955,10 @@ async function updateTotalDuration() {
   totalDurationEl.textContent = formatTime(total);
 }
 
-// [FIX #9] 音量コントロールの二重生成を防ぐガードを追加
 function createVolumeControls() {
   const playerControls = document.querySelector('.player-controls');
   if (!playerControls) return;
 
-  // 既に追加済みの場合はスキップ
   if (playerControls.querySelector('.volume-controls')) return;
 
   const volWrap = document.createElement('div');
@@ -1046,7 +1034,6 @@ function setMode(m) {
 
 function applyWindowSettingsFromApp() {
   if (window.electronAPI?.setSettings) {
-    // main process applies alwaysOnTop/tray/shortcuts; no-op here but keeps UI consistent.
   }
   try {
     if (videoPlayer) {
@@ -1099,7 +1086,6 @@ async function toggleFullscreen() {
 }
 
 async function toggleWindowVisibility() {
-  // Reserved for future UI binding.
 }
 
 function applyPlaybackCommand(command) {
@@ -1442,8 +1428,6 @@ window.addEventListener('keydown', async (e) => {
   }
 });
 
-// [FIX #11] beforeunload で runtimeStateDirtyTimer をクリア — アンロード中にタイマーが発火して
-//           存在しない API を呼び出す可能性を排除
 window.addEventListener('beforeunload', () => {
   if (runtimeStateDirtyTimer) {
     clearTimeout(runtimeStateDirtyTimer);
