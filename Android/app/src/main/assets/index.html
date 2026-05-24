@@ -20,34 +20,43 @@
 <body>
 <div id="app">
     <aside class="sidebar" role="complementary" aria-label="サイドバー">
-        <div class="brand">PlayPocket</div>
+        <div class="sidebar-content">
+            <div class="brand">PlayPocket</div>
 
-        <div class="playlist-controls">
-            <input id="newPlaylistName" placeholder="新しいプレイリスト名" aria-label="新しいプレイリスト名" maxlength="80" />
-            <button id="createPlaylistBtn" class="btn" type="button">作成</button>
-        </div>
-
-        <ul id="playlists" class="playlists" aria-label="プレイリスト一覧"></ul>
-
-        <div class="file-controls" aria-label="ファイル操作">
-            <input id="fileInput" type="file" accept="video/*" multiple />
-            <label for="fileInput" class="btn file-label">ファイルを追加</label>
-            <div id="dropZone" class="drop-zone" aria-hidden="false">ここにドラッグ＆ドロップ</div>
-
-            <div class="export-row">
-                <button id="exportMetaBtn" class="btn small" type="button">プレイリストをエクスポート</button>
-                <button id="exportWithBlobsBtn" class="btn small" type="button">プレイリストをエクスポート（埋め込み）</button>
+            <div class="playlist-controls">
+                <input id="newPlaylistName" placeholder="新しいプレイリスト名" aria-label="新しいプレイリスト名" maxlength="80" />
+                <button id="createPlaylistBtn" class="btn" type="button">作成</button>
             </div>
 
-            <input id="importFile" type="file" accept=".json" aria-label="プレイリストをインポート" />
-            <label for="importFile" class="btn file-label">プレイリストをインポート</label>
+            <ul id="playlists" class="playlists" aria-label="プレイリスト一覧"></ul>
+
+            <div class="file-controls" aria-label="ファイル操作">
+                <input id="fileInput" type="file" accept="video/*" multiple />
+                <label for="fileInput" class="btn file-label">ファイルを追加</label>
+                <div id="dropZone" class="drop-zone" aria-hidden="false">ここにドラッグ＆ドロップ</div>
+
+                <div class="export-row">
+                    <button id="exportMetaBtn" class="btn small" type="button">プレイリストをエクスポート</button>
+                    <button id="exportWithBlobsBtn" class="btn small" type="button">プレイリストをエクスポート（埋め込み）</button>
+                </div>
+
+                <input id="importFile" type="file" accept=".json" aria-label="プレイリストをインポート" />
+                <label for="importFile" class="btn file-label">プレイリストをインポート</label>
+            </div>
+        </div>
+
+        <div class="sidebar-footer">
+            <button id="openSettingsBtn" class="btn settings-btn" type="button">設定</button>
+            <a id="officialSiteLink" class="site-link" href="https://playpocket.f5.si" rel="noreferrer noopener">
+                https://playpocket.f5.si
+            </a>
         </div>
     </aside>
 
     <main class="main" role="main">
         <header class="topbar" role="banner">
             <button id="menuToggle" class="menu-btn" type="button" aria-label="メニューを開く">☰</button>
-            <div class="search">PlayPocket 1.2.1</div>
+            <div class="search">PlayPocket 1.3.1</div>
             <div class="modes" role="tablist" aria-label="再生モード">
                 <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
                 <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
@@ -101,6 +110,62 @@
 </div>
 
 <div id="overlay" class="overlay"></div>
+
+<div id="settingsModal" class="settings-modal" aria-hidden="true">
+    <div class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="settings-head">
+            <h2 id="settingsTitle">設定</h2>
+            <button id="closeSettingsBtn" class="small-btn settings-close" type="button" aria-label="閉じる">×</button>
+        </div>
+
+        <div class="settings-grid">
+            <label class="settings-row">
+                <span>音質</span>
+                <select id="audioPreset">
+                    <option value="standard">標準</option>
+                    <option value="high">高音質優先</option>
+                    <option value="low">軽量</option>
+                </select>
+            </label>
+
+            <label class="settings-row">
+                <span>前回の再生状態を復元</span>
+                <input id="resumePlayback" type="checkbox" />
+            </label>
+
+            <label class="settings-row">
+                <span>キャッシュを有効にする</span>
+                <input id="cacheEnabled" type="checkbox" />
+            </label>
+
+            <button id="clearCacheBtn" class="btn settings-action" type="button">キャッシュを削除</button>
+
+            <label class="settings-row settings-row-disabled">
+                <span>Discord RPCを有効にする（Androidでは未対応）</span>
+                <input id="rpcEnabled" type="checkbox" disabled />
+            </label>
+
+            <label class="settings-row settings-row-disabled">
+                <span>パソコン起動時に自動で起動（Androidでは未対応）</span>
+                <input id="startupLaunch" type="checkbox" disabled />
+            </label>
+
+            <label class="settings-row settings-row-disabled">
+                <span>閉じるボタンでウィンドウを最小化（Androidでは未対応）</span>
+                <input id="minimizeOnClose" type="checkbox" disabled />
+            </label>
+
+            <label class="settings-row settings-row-disabled">
+                <span>ハードウェアアクセラレーション（Androidでは固定）</span>
+                <input id="hardwareAcceleration" type="checkbox" disabled />
+            </label>
+        </div>
+
+        <p class="settings-note">
+            Android版では、デスクトップ専用の設定は保存のみで動作しません。キャッシュ削除はこのアプリ内から実行できます。
+        </p>
+    </div>
+</div>
 
 <script src="app.js"></script>
 </body>
