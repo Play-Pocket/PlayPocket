@@ -36,8 +36,18 @@ body{
   width:var(--sidebar-width);
   background:linear-gradient(180deg,#0f0f0f,#151515);
   padding:16px;
-  overflow:auto;
   border-right:1px solid var(--border-2);
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+
+.sidebar-content{
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  display:flex;
+  flex-direction:column;
 }
 
 .brand{
@@ -164,6 +174,31 @@ body{
 .export-row{
   display:grid;
   gap:8px;
+}
+
+.sidebar-footer{
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid var(--border-2);
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.settings-btn{
+  width:100%;
+}
+
+.site-link{
+  color:var(--muted);
+  font-size:13px;
+  text-decoration:none;
+  word-break:break-all;
+  opacity:.9;
+}
+
+.site-link:hover{
+  color:var(--accent);
 }
 
 .main{
@@ -450,6 +485,99 @@ body{
   border:0;
 }
 
+.settings-modal{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,0.62);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  z-index:9999;
+}
+
+.settings-modal.open{
+  display:flex;
+}
+
+.settings-card{
+  width:min(640px, 100%);
+  background:#141414;
+  border:1px solid var(--border);
+  border-radius:16px;
+  box-shadow:0 24px 80px rgba(0,0,0,.45);
+  padding:18px;
+}
+
+.settings-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:16px;
+}
+
+.settings-head h2{
+  margin:0;
+  font-size:20px;
+}
+
+.settings-close{
+  width:36px;
+  height:36px;
+  display:grid;
+  place-items:center;
+  font-size:20px;
+}
+
+.settings-grid{
+  display:grid;
+  gap:12px;
+}
+
+.settings-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border:1px solid var(--border-2);
+  border-radius:12px;
+  background:#101010;
+}
+
+.settings-row span{
+  color:var(--text);
+}
+
+.settings-row select{
+  padding:8px 10px;
+  border-radius:8px;
+  background:#111;
+  color:var(--text);
+  border:1px solid var(--border-2);
+  outline:none;
+}
+
+.settings-row input[type="checkbox"]{
+  width:18px;
+  height:18px;
+  accent-color:var(--accent);
+}
+
+.settings-action{
+  justify-content:center;
+  width:100%;
+  padding:10px 12px;
+}
+
+.settings-note{
+  margin:14px 2px 0;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.5;
+}
+
 @media (max-width: 1100px){
   #app{
     flex-direction:column;
@@ -459,6 +587,10 @@ body{
     width:100%;
     border-right:none;
     border-bottom:1px solid var(--border-2);
+  }
+
+  .sidebar-content{
+    max-height:none;
   }
 
   .player-area{
