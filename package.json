@@ -1,12 +1,12 @@
 {
   "name": "PlayPocket",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Offline playlist player (PlayPocket)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --publish never",
-    "dist": "electron-builder"
+    "dist": "electron-builder --publish never"
   },
   "author": "Takkunlego0916",
   "license": "MIT",
@@ -42,19 +42,9 @@
     ],
     "win": {
       "target": [
-        "nsis"
+        "portable"
       ],
       "icon": "app/icons/appIcon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "app/icons/appIcon.ico",
-      "uninstallerIcon": "app/icons/appIcon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
     },
     "mac": {
       "icon": "app/icons/appIcon.icns",
