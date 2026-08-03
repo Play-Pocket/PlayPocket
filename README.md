@@ -43,22 +43,6 @@ PlayPocket は、Windows/Android向けの軽量オフラインプレイリスト
 2. `PlayPocket-Setup-1.3.2-Android.apk` を実行
 3. インストール
 
-
----
-
-## 開発
-
-```bash
-npm install
-npm start
-```
-
----
-
-## ライセンス
-
-MIT License
-
 ---
 
 ## 作成
