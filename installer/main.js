@@ -6,12 +6,21 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { pathToFileURL } = require('url');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 
 const execFileAsync = promisify(execFile);
 
 const APP_ID = 'io.github.takkunlego0916.playpocket.installer';
 const PRODUCT_NAME = 'PlayPocket';
 const INSTALL_FOLDER_NAME = 'PlayPocket';
+
+const GITHUB_OWNER = process.env.GITHUB_OWNER || 'Play-Pocket';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'PlayPocketRelease';
+const GITHUB_ASSET_NAME = process.env.GITHUB_ASSET_NAME || '';
+const GITHUB_ASSET_REGEX = process.env.GITHUB_ASSET_REGEX || '^PlayPocket\\.[0-9]+\\.[0-9]+\\.[0-9]+\\.exe$';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_API_VERSION = process.env.GITHUB_API_VERSION || '2026-03-10';
 
 if (process.platform === 'win32') {
   try {
@@ -21,7 +30,6 @@ if (process.platform === 'win32') {
 
 let mainWindow = null;
 let state = {
-  sourceDir: '',
   installDir: ''
 };
 
@@ -35,13 +43,6 @@ function getUserDataDir() {
 
 function getStatePath() {
   return path.join(getUserDataDir(), 'state.json');
-}
-
-function getDefaultSourceDir() {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'release');
-  }
-  return path.resolve(__dirname, 'release');
 }
 
 function getDefaultInstallDir() {
@@ -72,10 +73,28 @@ function getInstallerIconPath() {
   return path.resolve(__dirname, 'build', 'icon.ico');
 }
 
+async function getInstallerIconDataUrl() {
+  const iconPath = getInstallerIconPath();
+  try {
+    const buf = await fsp.readFile(iconPath);
+    return `data:image/x-icon;base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeVersionText(value) {
+  return String(value || '').trim().replace(/^v/i, '');
+}
+
+function extractVersionFromText(value) {
+  const match = String(value || '').match(/([0-9]+(?:\.[0-9]+)+)/);
+  return match ? match[1] : null;
+}
 
 function compareVersions(a, b) {
-  const pa = (a || '0').split('.').map(Number);
-  const pb = (b || '0').split('.').map(Number);
+  const pa = normalizeVersionText(a).split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const pb = normalizeVersionText(b).split('.').map((n) => Number.parseInt(n, 10) || 0);
   const len = Math.max(pa.length, pb.length);
   for (let i = 0; i < len; i++) {
     const diff = (pb[i] || 0) - (pa[i] || 0);
@@ -84,9 +103,15 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function sendLog(message) {
+function sendProgress(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('installer:log', message);
+    mainWindow.webContents.send('installer:progress', payload);
+  }
+}
+
+function sendStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('installer:status', payload);
   }
 }
 
@@ -121,7 +146,6 @@ async function writeJson(filePath, value) {
 async function loadState() {
   const saved = await readJson(getStatePath(), {});
   state = {
-    sourceDir: typeof saved.sourceDir === 'string' && saved.sourceDir ? saved.sourceDir : getDefaultSourceDir(),
     installDir: typeof saved.installDir === 'string' && saved.installDir ? saved.installDir : getDefaultInstallDir()
   };
   return state;
@@ -155,19 +179,13 @@ function isExecutableNameAllowed(fileName) {
   return !lower.includes('uninstall');
 }
 
-function extractVersionFromName(filePath) {
-  const base = path.basename(filePath, path.extname(filePath));
-  const match = base.match(/([0-9]+(?:\.[0-9]+)+)/);
-  return match ? match[1] : null;
-}
-
 async function findLatestExe(dir) {
   if (!dir) return null;
   if (!(await existsDir(dir))) return null;
 
   const files = await walkFiles(dir);
-  const exes = files.filter(f => f.toLowerCase().endsWith('.exe'));
-  const filtered = exes.filter(f => isExecutableNameAllowed(path.basename(f)));
+  const exes = files.filter((f) => f.toLowerCase().endsWith('.exe'));
+  const filtered = exes.filter((f) => isExecutableNameAllowed(path.basename(f)));
 
   if (!filtered.length) return null;
 
@@ -178,7 +196,7 @@ async function findLatestExe(dir) {
       name: path.basename(file),
       mtimeMs: st.mtimeMs,
       size: st.size,
-      version: extractVersionFromName(file)
+      version: extractVersionFromText(file)
     };
   }));
 
@@ -202,7 +220,7 @@ function isSameOrNested(base, target) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-async function createShortcut(shortcutPath, targetPath, workingDir, iconPath) {
+async function createShortcut(shortcutPath, targetPath, workingDir, iconPath, argumentsText = '') {
   await ensureDir(path.dirname(shortcutPath));
   const script = [
     `$w = New-Object -ComObject WScript.Shell`,
@@ -210,8 +228,9 @@ async function createShortcut(shortcutPath, targetPath, workingDir, iconPath) {
     `$s.TargetPath = ${psQuote(targetPath)}`,
     `$s.WorkingDirectory = ${psQuote(workingDir)}`,
     `$s.IconLocation = ${psQuote(`${iconPath},0`)}`,
+    argumentsText ? `$s.Arguments = ${psQuote(argumentsText)}` : null,
     `$s.Save()`
-  ].join('; ');
+  ].filter(Boolean).join('; ');
   await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
     windowsHide: true
   });
@@ -229,26 +248,222 @@ async function removeDirSafe(dirPath) {
   } catch {}
 }
 
+function getGitHubHeaders() {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': GITHUB_API_VERSION,
+    'User-Agent': 'PlayPocket-Installer'
+  };
+
+  if (GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+  }
+
+  return headers;
+}
+
+function isGitHubConfigured() {
+  return Boolean(GITHUB_OWNER && GITHUB_REPO && GITHUB_OWNER !== 'YOUR_OWNER' && GITHUB_REPO !== 'YOUR_REPO');
+}
+
+function selectReleaseAsset(assets) {
+  if (!Array.isArray(assets) || !assets.length) return null;
+
+  if (GITHUB_ASSET_NAME) {
+    const exact = assets.find((asset) => asset.name === GITHUB_ASSET_NAME);
+    if (exact) return exact;
+  }
+
+  if (GITHUB_ASSET_REGEX) {
+    try {
+      const regex = new RegExp(GITHUB_ASSET_REGEX, 'i');
+      const matched = assets.find((asset) => regex.test(asset.name));
+      if (matched) return matched;
+    } catch {}
+  }
+
+  const exeAsset = assets.find((asset) => asset.name.toLowerCase().endsWith('.exe'));
+  if (exeAsset) return exeAsset;
+
+  const zipAsset = assets.find((asset) => asset.name.toLowerCase().endsWith('.zip'));
+  if (zipAsset) return zipAsset;
+
+  return assets[0];
+}
+
+function getReleaseVersion(release, asset) {
+  return (
+    extractVersionFromText(release?.tag_name) ||
+    extractVersionFromText(release?.name) ||
+    extractVersionFromText(asset?.name) ||
+    null
+  );
+}
+
+async function fetchLatestRelease() {
+  if (!isGitHubConfigured()) {
+    throw new Error('GitHub Releases の設定がありません');
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`, {
+    headers: getGitHubHeaders()
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub API エラー: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+async function downloadToFile(url, destPath, onProgress) {
+  const response = await fetch(url, {
+    headers: {
+      ...getGitHubHeaders(),
+      Accept: 'application/octet-stream'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`ダウンロード失敗: ${response.status} ${response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('ダウンロードデータを取得できませんでした');
+  }
+
+  const total = Number(response.headers.get('content-length') || 0);
+  let received = 0;
+
+  const reader = response.body.getReader();
+  await ensureDir(path.dirname(destPath));
+  const file = fs.createWriteStream(destPath);
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      file.write(Buffer.from(value));
+      if (typeof onProgress === 'function') {
+        const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null;
+        onProgress({
+          phase: 'download',
+          percent,
+          loaded: received,
+          total
+        });
+      }
+    }
+  } finally {
+    file.end();
+  }
+
+  await new Promise((resolve, reject) => {
+    file.on('finish', resolve);
+    file.on('error', reject);
+  });
+}
+
+async function expandZip(zipPath, destDir) {
+  await ensureDir(destDir);
+  const script = `Expand-Archive -LiteralPath ${psQuote(zipPath)} -DestinationPath ${psQuote(destDir)} -Force`;
+  await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    windowsHide: true
+  });
+}
+
+function getCacheRoot() {
+  return path.join(getUserDataDir(), 'github-cache');
+}
+
+function safeSegment(text) {
+  return String(text || 'unknown')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+async function prepareGithubSource() {
+  const release = await fetchLatestRelease();
+  const asset = selectReleaseAsset(release.assets || []);
+  if (!asset) {
+    throw new Error('GitHub Releases に使えるアセットが見つかりません');
+  }
+
+  const version = getReleaseVersion(release, asset);
+  const workDir = path.join(getCacheRoot(), safeSegment(release.tag_name || release.id || 'latest'));
+  await removeDirSafe(workDir);
+  await ensureDir(workDir);
+
+  const downloadedPath = path.join(workDir, asset.name);
+  sendProgress({
+    phase: 'download',
+    percent: 0,
+    title: 'ダウンロード中...',
+    detail: asset.name
+  });
+
+  await downloadToFile(asset.browser_download_url, downloadedPath, (info) => {
+    sendProgress({
+      phase: 'download',
+      percent: info.percent,
+      title: 'ダウンロード中...',
+      detail: asset.name
+    });
+  });
+
+  let sourceDir = workDir;
+  if (asset.name.toLowerCase().endsWith('.zip')) {
+    sendProgress({
+      phase: 'extract',
+      percent: 100,
+      title: '展開中...',
+      detail: asset.name
+    });
+    const extractedDir = path.join(workDir, 'extracted');
+    await removeDirSafe(extractedDir);
+    await expandZip(downloadedPath, extractedDir);
+    sourceDir = extractedDir;
+  }
+
+  return {
+    release,
+    asset,
+    version,
+    sourceDir
+  };
+}
+
 async function copyReleaseToInstall(sourceDir, installDir) {
   const sourceStat = await fsp.stat(sourceDir);
   if (!sourceStat.isDirectory()) {
     throw new Error('sourceDir is not a directory');
   }
-  if (isSameOrNested(path.resolve(sourceDir), path.resolve(installDir))) {
+
+  const resolvedSource = path.resolve(sourceDir);
+  const resolvedInstall = path.resolve(installDir);
+
+  if (isSameOrNested(resolvedSource, resolvedInstall)) {
     throw new Error('installDir must not be inside sourceDir');
   }
 
-  sendLog('インストール先の既存ファイルをクリア中...');
+  sendProgress({
+    phase: 'copy',
+    percent: 100,
+    title: 'インストール中...',
+    detail: 'ファイルを配置しています'
+  });
+
   await removeDirSafe(installDir);
   await ensureDir(path.dirname(installDir));
 
-  sendLog('ファイルをコピー中...');
   await fsp.cp(sourceDir, installDir, {
     recursive: true,
     force: true,
     preserveTimestamps: true
   });
-  sendLog('ファイルのコピーが完了しました');
 }
 
 async function getInstalledExe(installDir) {
@@ -263,17 +478,22 @@ async function syncShortcuts(installDir) {
   const workingDir = path.dirname(targetPath);
   const iconPath = targetPath;
 
-  sendLog('デスクトップショートカットを作成中...');
+  sendProgress({
+    phase: 'shortcut',
+    percent: 100,
+    title: 'ショートカット作成中...',
+    detail: 'デスクトップとスタートメニューを更新しています'
+  });
+
   await createShortcut(getDesktopShortcutPath(), targetPath, workingDir, iconPath);
-
-  sendLog('スタートメニューショートカットを作成中...');
   await createShortcut(getStartMenuShortcutPath(), targetPath, workingDir, iconPath);
-
-  await ensureDir(getStartMenuShortcutDir());
-  const uninstallTarget = process.execPath;
-  await createShortcut(getUninstallShortcutPath(), uninstallTarget, path.dirname(uninstallTarget), uninstallTarget);
-
-  sendLog('ショートカットの作成が完了しました');
+  await createShortcut(
+    getUninstallShortcutPath(),
+    process.execPath,
+    path.dirname(process.execPath),
+    getInstallerIconPath(),
+    '--uninstall'
+  );
 }
 
 async function removeShortcuts() {
@@ -284,21 +504,12 @@ async function removeShortcuts() {
 }
 
 async function buildStatus() {
-  const sourceDir = state.sourceDir || getDefaultSourceDir();
   const installDir = state.installDir || getDefaultInstallDir();
-
-  const sourceLatest = await findLatestExe(sourceDir);
   const installedLatest = await getInstalledExe(installDir);
 
   return {
-    sourceDir,
     installDir,
-    sourceExists: await existsDir(sourceDir),
     installExists: await existsDir(installDir),
-    sourceLatestExe: sourceLatest ? sourceLatest.file : null,
-    sourceLatestName: sourceLatest ? sourceLatest.name : null,
-    sourceLatestVersion: sourceLatest ? sourceLatest.version : null,
-    sourceLatestTime: sourceLatest ? sourceLatest.mtimeMs : null,
     installedExe: installedLatest ? installedLatest.file : null,
     installedName: installedLatest ? installedLatest.name : null,
     installedVersion: installedLatest ? installedLatest.version : null,
@@ -308,89 +519,88 @@ async function buildStatus() {
 }
 
 async function performInstallLike(action, payload = {}) {
-  const sourceDir = typeof payload.sourceDir === 'string' && payload.sourceDir ? payload.sourceDir : state.sourceDir || getDefaultSourceDir();
-  const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
-
-  await saveState({ sourceDir, installDir });
-
-  const latest = await findLatestExe(sourceDir);
-  if (!latest) {
-    throw new Error('release フォルダ内に exe が見つかりません');
+  if (!isGitHubConfigured()) {
+    throw new Error('GitHub_OWNER と GITHUB_REPO を設定してください');
   }
-  sendLog(`対象 exe: ${latest.name}${latest.version ? ` (v${latest.version})` : ''}`);
 
-  await copyReleaseToInstall(sourceDir, installDir);
+  const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
+  await saveState({ installDir });
+
+  const source = await prepareGithubSource();
+  const latest = await findLatestExe(source.sourceDir);
+  if (!latest) {
+    throw new Error('ダウンロードしたアセット内に exe が見つかりません');
+  }
+
+  sendProgress({
+    phase: 'install',
+    percent: 100,
+    title: 'インストール中...',
+    detail: latest.name
+  });
+
+  await copyReleaseToInstall(source.sourceDir, installDir);
   await syncShortcuts(installDir);
 
-  const message =
-    action === 'repair' ? '修復が完了しました' :
-    action === 'update'  ? 'アップデートが完了しました' :
-                           'インストールが完了しました';
-  return { action, message };
+  return {
+    action,
+    message:
+      action === 'repair' ? '修復が完了しました' :
+      action === 'update' ? 'アップデートが完了しました' :
+      'インストールが完了しました'
+  };
 }
 
 async function performUpdate(payload = {}) {
-  const sourceDir = typeof payload.sourceDir === 'string' && payload.sourceDir ? payload.sourceDir : state.sourceDir || getDefaultSourceDir();
+  if (!isGitHubConfigured()) {
+    throw new Error('GitHub_OWNER と GITHUB_REPO を設定してください');
+  }
+
   const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
+  await saveState({ installDir });
 
-  await saveState({ sourceDir, installDir });
-
-  const sourceLatest = await findLatestExe(sourceDir);
-  if (!sourceLatest) {
-    throw new Error('release フォルダ内に exe が見つかりません');
+  const release = await fetchLatestRelease();
+  const asset = selectReleaseAsset(release.assets || []);
+  if (!asset) {
+    throw new Error('GitHub Releases に使えるアセットが見つかりません');
   }
 
+  const sourceVersion = getReleaseVersion(release, asset);
   const installedLatest = await getInstalledExe(installDir);
-  if (!installedLatest) {
-    sendLog('未インストールのため、新規インストールを実行します...');
-    await copyReleaseToInstall(sourceDir, installDir);
-    await syncShortcuts(installDir);
-    return { action: 'update', message: '未インストールだったため、新規インストールを実行しました' };
+
+  if (installedLatest && sourceVersion && installedLatest.version) {
+    if (compareVersions(installedLatest.version, sourceVersion) <= 0) {
+      return { action: 'update', message: 'すでに最新です' };
+    }
   }
 
-  sendLog(`ソース:          ${sourceLatest.name}${sourceLatest.version ? ` (v${sourceLatest.version})` : ''}`);
-  sendLog(`インストール済み: ${installedLatest.name}${installedLatest.version ? ` (v${installedLatest.version})` : ''}`);
-
-  let isUpToDate = false;
-  if (sourceLatest.version && installedLatest.version) {
-    isUpToDate = compareVersions(sourceLatest.version, installedLatest.version) >= 0;
-  } else {
-    isUpToDate = sourceLatest.mtimeMs <= installedLatest.mtimeMs;
+  const source = await prepareGithubSource();
+  const latest = await findLatestExe(source.sourceDir);
+  if (!latest) {
+    throw new Error('ダウンロードしたアセット内に exe が見つかりません');
   }
 
-  if (isUpToDate) {
-    return { action: 'update', message: 'すでに最新です' };
-  }
-
-  await copyReleaseToInstall(sourceDir, installDir);
+  await copyReleaseToInstall(source.sourceDir, installDir);
   await syncShortcuts(installDir);
+
   return { action: 'update', message: 'アップデートが完了しました' };
 }
 
 async function performUninstall(payload = {}) {
   const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
 
-  sendLog('ショートカットを削除中...');
-  await removeShortcuts();
-
-  sendLog('インストールフォルダを削除中...');
-  await removeDirSafe(installDir);
-
-  await saveState({
-    installDir,
-    sourceDir: typeof payload.sourceDir === 'string' && payload.sourceDir ? payload.sourceDir : state.sourceDir || getDefaultSourceDir()
+  sendProgress({
+    phase: 'uninstall',
+    percent: 100,
+    title: 'アンインストール中...',
+    detail: 'ショートカットとフォルダを削除しています'
   });
+
+  await removeShortcuts();
+  await removeDirSafe(installDir);
+  await saveState({ installDir });
 
   return { action: 'uninstall', message: 'アンインストールが完了しました' };
-}
-
-async function chooseSourceDir() {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'release フォルダを選択',
-    properties: ['openDirectory']
-  });
-  if (result.canceled || !result.filePaths.length) return null;
-  return result.filePaths[0];
 }
 
 async function chooseInstallDir() {
@@ -404,13 +614,13 @@ async function chooseInstallDir() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1260,
-    height: 820,
-    minWidth: 1080,
-    minHeight: 720,
+    width: 840,
+    height: 560,
+    minWidth: 760,
+    minHeight: 520,
     autoHideMenuBar: true,
     title: 'PlayPocket Installer',
-    backgroundColor: '#070b14',
+    backgroundColor: '#0b1020',
     icon: getInstallerIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -426,54 +636,24 @@ function createWindow() {
   });
 }
 
-
 ipcMain.handle('installer:get-status', async () => buildStatus());
 
 ipcMain.handle('installer:get-icon-path', async () => {
-  const iconPath = getInstallerIconPath();
-  if (!iconPath) return null;
-  try {
-    return pathToFileURL(iconPath).href;
-  } catch {
-    return null;
-  }
+  return getInstallerIconDataUrl();
 });
-
-ipcMain.handle('installer:choose-source-dir', async () => chooseSourceDir());
 
 ipcMain.handle('installer:choose-install-dir', async () => chooseInstallDir());
 
-ipcMain.handle('installer:set-source-dir', async (_, sourceDir) => {
-  if (typeof sourceDir !== 'string' || !sourceDir) return false;
-  await saveState({ sourceDir });
-  return true;
-});
-
 ipcMain.handle('installer:set-install-dir', async (_, installDir) => {
-  if (typeof installDir !== 'string' || !installDir) return false;
-  await saveState({ installDir });
+  if (typeof installDir !== 'string' || !installDir.trim()) return false;
+  await saveState({ installDir: installDir.trim() });
   return true;
 });
 
 ipcMain.handle('installer:install', async (_, payload) => performInstallLike('install', payload));
-
 ipcMain.handle('installer:repair', async (_, payload) => performInstallLike('repair', payload));
-
 ipcMain.handle('installer:update', async (_, payload) => performUpdate(payload));
-
 ipcMain.handle('installer:uninstall', async (_, payload) => performUninstall(payload));
-
-ipcMain.handle('installer:open-source-dir', async () => {
-  const sourceDir = state.sourceDir || getDefaultSourceDir();
-  await shell.openPath(sourceDir);
-  return true;
-});
-
-ipcMain.handle('installer:open-install-dir', async () => {
-  const installDir = state.installDir || getDefaultInstallDir();
-  await shell.openPath(installDir);
-  return true;
-});
 
 app.whenReady().then(async () => {
   await loadState();
