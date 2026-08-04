@@ -146,7 +146,10 @@ class MainActivity : AppCompatActivity() {
                     url.startsWith("blob:") -> false
                     url.startsWith("data:") -> false
                     url.startsWith("http://") || url.startsWith("https://") -> {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        if (intent.resolveActivity(packageManager) != null) {
+                            startActivity(intent)
+                        }
                         true
                     }
                     else -> true
