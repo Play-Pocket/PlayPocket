@@ -1,6 +1,6 @@
 {
   "name": "playpocket-installer",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "PlayPocket installer",
   "main": "main.js",
   "author": "Takkunlego0916",
@@ -8,11 +8,11 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis --publish never"
+    "dist": "electron-builder --win portable --publish never"
   },
   "devDependencies": {
-    "electron": "^36.0.0",
-    "electron-builder": "^24.0.0"
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "io.github.takkunlego0916.playpocket.installer",
@@ -39,20 +39,9 @@
     ],
     "win": {
       "target": [
-        "nsis"
+        "portable"
       ],
       "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "runAfterFinish": true
     }
   }
 }
