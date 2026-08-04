@@ -1,93 +1,59 @@
-const sourceDirEl    = document.getElementById('sourceDir');
-const installDirEl   = document.getElementById('installDir');
-const sourceExeEl    = document.getElementById('sourceExe');
-const installedExeEl = document.getElementById('installedExe');
-const statusTextEl   = document.getElementById('statusText');
-const sourceStateEl  = document.getElementById('sourceState');
-const installStateEl = document.getElementById('installState');
-const sourceState2El = document.getElementById('sourceState2');
-const installState2El = document.getElementById('installState2');
-const logEl          = document.getElementById('log');
-const heroIconEl     = document.getElementById('heroIcon');
+const installDirEl = document.getElementById('installDir');
+const statusTextEl = document.getElementById('statusText');
+const heroIconEl = document.getElementById('heroIcon');
 
-const installBtn     = document.getElementById('installBtn');
-const repairBtn      = document.getElementById('repairBtn');
-const updateBtn      = document.getElementById('updateBtn');
-const uninstallBtn   = document.getElementById('uninstallBtn');
-const refreshBtn     = document.getElementById('refreshBtn');
-const refreshBtn2    = document.getElementById('refreshBtn2');
-const browseSourceBtn  = document.getElementById('browseSource');
+const progressTitleEl = document.getElementById('progressTitle');
+const progressPercentEl = document.getElementById('progressPercent');
+const progressDetailEl = document.getElementById('progressDetail');
+const progressBarEl = document.getElementById('progressBar');
+
+const installBtn = document.getElementById('installBtn');
+const repairBtn = document.getElementById('repairBtn');
+const updateBtn = document.getElementById('updateBtn');
+const uninstallBtn = document.getElementById('uninstallBtn');
 const browseInstallBtn = document.getElementById('browseInstall');
-const openSourceBtn  = document.getElementById('openSource');
 const openInstallBtn = document.getElementById('openInstall');
-const clearLogBtn    = document.getElementById('clearLog');
 
-function formatTime(ms) {
-  if (!ms) return '-';
-  try {
-    return new Date(ms).toLocaleString('ja-JP');
-  } catch {
-    return '-';
-  }
-}
+let busy = false;
 
-function formatVersion(version) {
-  if (!version) return 'v-';
-  return `v${version}`;
-}
-
-function appendLog(text) {
-  const time = new Date().toLocaleTimeString('ja-JP');
-  const line = `[${time}] ${text}`;
-  if (logEl.textContent) {
-    logEl.textContent += `\n${line}`;
-  } else {
-    logEl.textContent = line;
-  }
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-function setBusy(busy) {
+function setBusy(nextBusy) {
+  busy = nextBusy;
   const buttons = [
     installBtn,
     repairBtn,
     updateBtn,
     uninstallBtn,
-    browseSourceBtn,
     browseInstallBtn,
-    openSourceBtn,
-    openInstallBtn,
-    refreshBtn,
-    refreshBtn2
+    openInstallBtn
   ];
 
   for (const button of buttons) {
-    button.disabled = busy;
+    button.disabled = nextBusy;
   }
+}
 
-  if (!busy) {
-    refreshBtn.disabled = false;
-    refreshBtn2.disabled = false;
+function setProgress(payload = {}) {
+  const percent = typeof payload.percent === 'number' && Number.isFinite(payload.percent)
+    ? Math.max(0, Math.min(100, payload.percent))
+    : null;
+
+  progressTitleEl.textContent = payload.title || '待機中';
+  progressDetailEl.textContent = payload.detail || '';
+
+  if (percent === null) {
+    progressPercentEl.textContent = '--%';
+    progressBarEl.style.width = '18%';
+    progressBarEl.classList.add('indeterminate');
+  } else {
+    progressPercentEl.textContent = `${percent}%`;
+    progressBarEl.style.width = `${percent}%`;
+    progressBarEl.classList.remove('indeterminate');
   }
 }
 
 function setStatus(status) {
-  sourceDirEl.value  = status.sourceDir  || '';
   installDirEl.value = status.installDir || '';
-
-  sourceExeEl.textContent = status.sourceLatestVersion
-    ? `${formatVersion(status.sourceLatestVersion)} / ${formatTime(status.sourceLatestTime)}`
-    : 'v-';
-
-  installedExeEl.textContent = status.installedVersion
-    ? `${formatVersion(status.installedVersion)} / ${formatTime(status.installedTime)}`
-    : 'v-';
-
-  sourceStateEl.textContent  = `ソース: ${status.sourceExists  ? '存在' : '存在しません'}`;
-  installStateEl.textContent = `インストール先: ${status.installExists ? '存在' : '存在しません'}`;
-  sourceState2El.textContent  = status.sourceExists  ? '存在' : '存在しません';
-  installState2El.textContent = status.installExists ? '存在' : '存在しません';
-  statusTextEl.textContent    = status.installExists ? '状態: 準備完了' : '状態: 未インストール';
+  statusTextEl.textContent = status.installExists ? '準備完了' : '未作成';
 }
 
 async function setIcon() {
@@ -100,23 +66,26 @@ async function setIcon() {
 }
 
 async function refresh() {
-  setBusy(true);
   try {
     const status = await window.installer.getStatus();
     setStatus(status);
   } catch (error) {
-    appendLog(`状態取得失敗: ${error.message}`);
-  } finally {
-    setBusy(false);
+    statusTextEl.textContent = `取得失敗: ${error.message}`;
   }
 }
 
 async function runAction(action) {
+  if (busy) return;
   setBusy(true);
+  setProgress({
+    phase: 'start',
+    percent: 0,
+    title: '準備中...',
+    detail: '処理を開始しています'
+  });
 
   try {
     const payload = {
-      sourceDir:  sourceDirEl.value.trim(),
       installDir: installDirEl.value.trim()
     };
 
@@ -131,38 +100,35 @@ async function runAction(action) {
     } else if (action === 'uninstall') {
       const ok = confirm('PlayPocket をアンインストールしますか？');
       if (!ok) {
-        appendLog('アンインストールをキャンセルしました');
+        setProgress({
+          percent: 0,
+          title: 'キャンセルしました',
+          detail: 'アンインストールを中止しました'
+        });
         return;
       }
       result = await window.installer.uninstall(payload);
     }
 
     if (result?.message) {
-      appendLog(result.message);
+      setProgress({
+        percent: 100,
+        title: '完了',
+        detail: result.message
+      });
     }
 
-    const status = await window.installer.getStatus();
-    setStatus(status);
+    await refresh();
   } catch (error) {
-    appendLog(`操作失敗: ${error.message}`);
+    setProgress({
+      percent: 0,
+      title: '失敗しました',
+      detail: error.message
+    });
   } finally {
     setBusy(false);
   }
 }
-
-browseSourceBtn.addEventListener('click', async () => {
-  try {
-    const dir = await window.installer.chooseSourceDir();
-    if (dir) {
-      sourceDirEl.value = dir;
-      await window.installer.setSourceDir(dir);
-      appendLog(`release フォルダを設定しました: ${dir}`);
-      await refresh();
-    }
-  } catch (error) {
-    appendLog(`参照失敗: ${error.message}`);
-  }
-});
 
 browseInstallBtn.addEventListener('click', async () => {
   try {
@@ -170,19 +136,14 @@ browseInstallBtn.addEventListener('click', async () => {
     if (dir) {
       installDirEl.value = dir;
       await window.installer.setInstallDir(dir);
-      appendLog(`インストール先を設定しました: ${dir}`);
       await refresh();
     }
   } catch (error) {
-    appendLog(`参照失敗: ${error.message}`);
-  }
-});
-
-openSourceBtn.addEventListener('click', async () => {
-  try {
-    await window.installer.openSourceDir();
-  } catch (error) {
-    appendLog(`フォルダを開けませんでした: ${error.message}`);
+    setProgress({
+      percent: 0,
+      title: '失敗しました',
+      detail: error.message
+    });
   }
 });
 
@@ -190,36 +151,34 @@ openInstallBtn.addEventListener('click', async () => {
   try {
     await window.installer.openInstallDir();
   } catch (error) {
-    appendLog(`フォルダを開けませんでした: ${error.message}`);
+    setProgress({
+      percent: 0,
+      title: '失敗しました',
+      detail: error.message
+    });
   }
 });
 
-installBtn.addEventListener('click',   () => runAction('install'));
-repairBtn.addEventListener('click',    () => runAction('repair'));
-updateBtn.addEventListener('click',    () => runAction('update'));
+installBtn.addEventListener('click', () => runAction('install'));
+repairBtn.addEventListener('click', () => runAction('repair'));
+updateBtn.addEventListener('click', () => runAction('update'));
 uninstallBtn.addEventListener('click', () => runAction('uninstall'));
-refreshBtn.addEventListener('click',   refresh);
-refreshBtn2.addEventListener('click',  refresh);
-
-clearLogBtn.addEventListener('click', () => {
-  logEl.textContent = '';
-  appendLog('ログを消去しました');
-});
-
-sourceDirEl.addEventListener('change', async () => {
-  await window.installer.setSourceDir(sourceDirEl.value.trim());
-  await refresh();
-});
 
 installDirEl.addEventListener('change', async () => {
   await window.installer.setInstallDir(installDirEl.value.trim());
   await refresh();
 });
 
-window.installer.onLog(appendLog);
+window.installer.onProgress((payload) => {
+  setProgress(payload);
+});
 
 (async () => {
   await setIcon();
-  appendLog('起動しました');
   await refresh();
+  setProgress({
+    percent: 0,
+    title: '待機中',
+    detail: '操作を開始してください'
+  });
 })();
