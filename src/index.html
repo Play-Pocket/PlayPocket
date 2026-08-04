@@ -36,6 +36,7 @@
           <div id="dropZone" class="drop-zone" aria-hidden="false">ここにドラッグ＆ドロップ</div>
 
           <div class="export-row">
+            <button id="sharePlaylistBtn" class="btn share-button" type="button">プレイリストを共有</button>
             <button id="exportMetaBtn" class="btn small" type="button">プレイリストをエクスポート</button>
             <button id="exportWithBlobsBtn" class="btn small" type="button">プレイリストをエクスポート（埋め込み）</button>
           </div>
@@ -48,14 +49,14 @@
       <div class="sidebar-footer">
         <button id="openSettingsBtn" class="btn settings-btn" type="button">設定</button>
         <a id="officialSiteLink" class="site-link" href="https://playpocket.f5.si" rel="noreferrer noopener">
-          https://playpocket.f5.si
+          公式サイト：https://playpocket.f5.si
         </a>
       </div>
     </aside>
 
     <main class="main" role="main">
       <header class="topbar" role="banner">
-        <div class="search">PlayPocket 1.3.1</div>
+        <div class="search">PlayPocket 1.4.0</div>
         <div class="modes" role="tablist" aria-label="再生モード">
           <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
           <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
@@ -106,6 +107,46 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="shareModal" class="settings-modal share-modal" aria-hidden="true">
+    <div class="settings-card share-card" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+      <div class="settings-head">
+        <div>
+          <p class="modal-eyebrow">SHARE PLAYLIST</p>
+          <h2 id="shareTitle">プレイリストを共有</h2>
+        </div>
+        <button id="closeShareBtn" class="small-btn settings-close" type="button" aria-label="閉じる">×</button>
+      </div>
+
+      <p id="sharePlaylistSummary" class="share-summary"></p>
+
+      <section class="share-option">
+        <div class="share-option-icon" aria-hidden="true">↗</div>
+        <div class="share-option-content">
+          <h3>動画を含む共有ファイル</h3>
+          <p>受け取った人がすぐに再生できる共有パッケージを作成します。最大 500MB のファイルをメールやチャットで送れます。</p>
+          <button id="downloadSharePackageBtn" class="btn share-primary" type="button">共有ファイルを作成</button>
+        </div>
+      </section>
+
+      <section class="share-option compact">
+        <div class="share-option-icon muted" aria-hidden="true">#</div>
+        <div class="share-option-content">
+          <h3>軽量共有コード</h3>
+          <p>動画を含まない、タイトル・順番・時間だけのコードです。おすすめのリストを渡す用途に向いています。</p>
+          <button id="copyShareCodeBtn" class="btn" type="button">共有コードをコピー</button>
+        </div>
+      </section>
+
+      <section class="share-import">
+        <label for="shareCodeInput">共有コードを受け取った場合</label>
+        <textarea id="shareCodeInput" rows="3" maxlength="520000" placeholder="PLAYPOCKET_SHARE_V1: から始まるコードを貼り付け"></textarea>
+        <button id="importShareCodeBtn" class="btn" type="button">共有コードを読み込む</button>
+      </section>
+
+      <p id="shareStatus" class="share-status" role="status" aria-live="polite"></p>
+    </div>
   </div>
 
   <div id="settingsModal" class="settings-modal" aria-hidden="true">
@@ -179,6 +220,7 @@
     </div>
   </div>
 
+  <script src="share.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
