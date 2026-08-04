@@ -498,6 +498,125 @@ body{ overflow:hidden; -webkit-text-size-adjust:100%; -webkit-tap-highlight-colo
   line-height:1.5;
 }
 
+.share-button{
+  color:#071b0e;
+  background:var(--accent);
+  border-color:transparent;
+  font-weight:700;
+}
+.share-button:hover{
+  background:#35d86c;
+  color:#071b0e;
+}
+.share-card{
+  width:min(700px, 100%);
+}
+.modal-eyebrow{
+  margin:0 0 4px;
+  color:var(--accent);
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.12em;
+}
+.share-summary{
+  margin:0 0 16px;
+  color:var(--muted);
+  line-height:1.55;
+}
+.share-option{
+  display:flex;
+  gap:14px;
+  padding:16px;
+  border:1px solid rgba(29,185,84,.28);
+  background:linear-gradient(135deg, rgba(29,185,84,.12), rgba(29,185,84,.025));
+  border-radius:14px;
+}
+.share-option + .share-option,
+.share-import{
+  margin-top:12px;
+}
+.share-option.compact{
+  border-color:rgba(255,255,255,0.03);
+  background:#101010;
+}
+.share-option-icon{
+  width:40px;
+  height:40px;
+  flex:0 0 40px;
+  display:grid;
+  place-items:center;
+  border-radius:12px;
+  color:#06170c;
+  background:var(--accent);
+  font-size:22px;
+  font-weight:700;
+}
+.share-option-icon.muted{
+  color:var(--muted);
+  background:#252525;
+}
+.share-option-content{
+  min-width:0;
+}
+.share-option h3{
+  margin:0;
+  font-size:15px;
+}
+.share-option p{
+  margin:6px 0 12px;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.55;
+}
+.share-primary{
+  color:#071b0e;
+  background:var(--accent);
+  border-color:transparent;
+  font-weight:700;
+}
+.share-primary:hover{
+  color:#071b0e;
+  background:#35d86c;
+}
+.share-import{
+  display:grid;
+  gap:8px;
+  padding-top:16px;
+  border-top:1px solid rgba(255,255,255,0.03);
+}
+.share-import label{
+  color:var(--text);
+  font-size:14px;
+  font-weight:600;
+}
+.share-import textarea{
+  width:100%;
+  resize:vertical;
+  padding:10px 12px;
+  border:1px solid rgba(255,255,255,0.06);
+  border-radius:10px;
+  background:#0b0b0b;
+  color:var(--text);
+  font:12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  outline:none;
+}
+.share-import textarea:focus{
+  border-color:rgba(29,185,84,.55);
+  box-shadow:0 0 0 2px rgba(29,185,84,.12);
+}
+.share-status{
+  min-height:20px;
+  margin:12px 0 0;
+  color:var(--muted);
+  font-size:13px;
+}
+.share-status.success{
+  color:#6ee998;
+}
+.share-status.error{
+  color:#ff8383;
+}
+
 @media (orientation: portrait), (max-width: 900px){
   body{ overflow:auto; }
   #app{ flex-direction:column; min-height:100dvh; }
