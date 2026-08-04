@@ -8,6 +8,9 @@ const MAX_IMPORTED_ITEMS = 500;
 const MAX_IMPORTED_JSON_BYTES = 50 * 1024 * 1024;
 const MAX_VIDEO_FILES_PER_DROP = 100;
 const MAX_THUMBNAIL_LENGTH = 2_000_000;
+const MAX_SHARED_PACKAGE_BYTES = 500 * 1024 * 1024;
+const SHARE_PACKAGE_EXTENSION = '.playpocket.json';
+const ANDROID_EMBEDDED_MEDIA_SAFE_BYTES = 150 * 1024 * 1024;
 
 const APP_SETTINGS_KEY = 'playpocket-settings-v1';
 const APP_SESSION_KEY = 'playpocket-session-v2';
@@ -81,6 +84,16 @@ const importFile = document.getElementById('importFile');
 const menuToggle = document.getElementById('menuToggle');
 const sidebar = document.querySelector('.sidebar');
 const overlay = document.getElementById('overlay');
+
+const sharePlaylistBtn = document.getElementById('sharePlaylistBtn');
+const shareModal = document.getElementById('shareModal');
+const closeShareBtn = document.getElementById('closeShareBtn');
+const sharePlaylistSummary = document.getElementById('sharePlaylistSummary');
+const downloadSharePackageBtn = document.getElementById('downloadSharePackageBtn');
+const copyShareCodeBtn = document.getElementById('copyShareCodeBtn');
+const shareCodeInput = document.getElementById('shareCodeInput');
+const importShareCodeBtn = document.getElementById('importShareCodeBtn');
+const shareStatus = document.getElementById('shareStatus');
 
 const openSettingsBtn = document.getElementById('openSettingsBtn');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
@@ -345,6 +358,33 @@ function closeSettings() {
   scheduleSessionSave();
 }
 
+function setShareStatus(message = '', tone = '') {
+  if (!shareStatus) return;
+  shareStatus.textContent = message;
+  shareStatus.className = `share-status${tone ? ` ${tone}` : ''}`;
+}
+
+async function openShareModal() {
+  if (!shareModal) return;
+  const playlist = await getCurrentPlaylist();
+  const name = playlist?.name || currentPlaylist || 'プレイリスト';
+  const count = Array.isArray(playlist?.items) ? playlist.items.length : 0;
+  if (sharePlaylistSummary) {
+    sharePlaylistSummary.textContent = `「${name}」を共有します。${count} 本の動画が含まれています。`;
+  }
+  setShareStatus();
+  shareModal.classList.add('open');
+  shareModal.setAttribute('aria-hidden', 'false');
+  scheduleSessionSave();
+}
+
+function closeShareModal() {
+  if (!shareModal) return;
+  shareModal.classList.remove('open');
+  shareModal.setAttribute('aria-hidden', 'true');
+  scheduleSessionSave();
+}
+
 function openSidebar() {
   sidebar?.classList.add('open');
   overlay?.classList.add('active');
@@ -365,6 +405,10 @@ function toggleSidebar() {
 
 window.__ppClosePanels = function () {
   let changed = false;
+  if (shareModal?.classList.contains('open')) {
+    closeShareModal();
+    changed = true;
+  }
   if (settingsModal?.classList.contains('open')) {
     closeSettings();
     changed = true;
@@ -512,6 +556,11 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function sanitizeFilename(value, fallback = 'playlist') {
+  const filename = safeText(value).replace(/[<>:"/\\|?*]/g, '-').replace(/\.+$/g, '');
+  return filename || fallback;
+}
+
 function blobToBase64(blob) {
   return new Promise((res, rej) => {
     const reader = new FileReader();
@@ -536,6 +585,108 @@ function base64ToBlob(base64, type) {
   const arr = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   return new Blob([arr], { type: sanitizeMimeType(type) });
+}
+
+async function buildPlaylistExport(includeBlobs = false) {
+  const pl = await getCurrentPlaylist();
+  if (!pl) throw new Error('playlist-not-found');
+
+  const items = [];
+  for (const id of pl.items) {
+    const meta = await idbGet(STORE_VIDEOS, id);
+    if (!meta) continue;
+    const item = {
+      id: safeText(String(meta.id || '')) || uid(),
+      name: safeText(meta.name) || 'video',
+      duration: clampNumber(Number(meta.duration), 0),
+      mimeType: sanitizeMimeType(meta.mimeType),
+      size: clampNumber(Number(meta.size), 0),
+      thumbnail: safeThumbnailSrc(meta.thumbnail)
+    };
+    if (includeBlobs && meta.blob) item.blobBase64 = await blobToBase64(meta.blob);
+    items.push(item);
+  }
+
+  return { name: pl.name, items };
+}
+
+async function getPlaylistTotalMediaSize(pl) {
+  let total = 0;
+  for (const id of pl.items) {
+    const meta = await idbGet(STORE_VIDEOS, id);
+    if (meta && Number.isFinite(meta.size)) total += meta.size;
+  }
+  return total;
+}
+
+async function assertEmbeddedExportIsSafe() {
+  if (!isAndroid) return;
+
+  const pl = await getCurrentPlaylist();
+  if (!pl) return;
+
+  const total = await getPlaylistTotalMediaSize(pl);
+  if (total > ANDROID_EMBEDDED_MEDIA_SAFE_BYTES) {
+    const err = new Error('embedded-export-too-large-for-device');
+    err.totalBytes = total;
+    throw err;
+  }
+}
+
+async function getUniquePlaylistName(baseName, suffix) {
+  const normalized = normalizePlaylistName(baseName) || 'プレイリスト';
+  const makeName = (tail) => {
+    const available = Math.max(1, MAX_PLAYLIST_NAME_LENGTH - tail.length);
+    return `${normalized.slice(0, available)}${tail}`;
+  };
+  const initial = makeName(suffix);
+  if (!await idbGet(STORE_PLAYLISTS, initial)) return initial;
+
+  for (let index = 2; index <= 999; index++) {
+    const candidate = makeName(`${suffix} ${index}`);
+    if (candidate && !await idbGet(STORE_PLAYLISTS, candidate)) return candidate;
+  }
+  throw new Error('playlist-name-unavailable');
+}
+
+async function importPlaylistPayload(payload, suffix) {
+  const baseName = normalizePlaylistName(payload?.name);
+  if (!baseName || !Array.isArray(payload?.items)) throw new Error('invalid');
+
+  const name = await getUniquePlaylistName(baseName, suffix);
+  const items = [];
+
+  for (const it of payload.items.slice(0, MAX_IMPORTED_ITEMS)) {
+    if (!it || typeof it !== 'object') continue;
+
+    const id = uid();
+    const metaName = normalizePlaylistName(it.name) || 'video';
+    const duration = clampNumber(Number(it.duration), 0);
+    const size = clampNumber(Number(it.size), 0);
+    const thumbnail = safeThumbnailSrc(it.thumbnail);
+    const mimeType = sanitizeMimeType(it.mimeType);
+    let blob = null;
+
+    if (typeof it.blobBase64 === 'string' && it.blobBase64.length > 0) {
+      blob = base64ToBlob(it.blobBase64, mimeType);
+    }
+
+    const meta = { id, name: metaName, duration, mimeType, blob, thumbnail, size };
+    await idbPut(STORE_VIDEOS, meta);
+    videoListCache[id] = meta;
+    items.push(id);
+  }
+
+  await idbPut(STORE_PLAYLISTS, { name, items });
+  currentPlaylist = name;
+  currentIndex = 0;
+  await refreshPlaylistsUI();
+  await refreshTrackList();
+  await updateTotalDuration();
+  updateSeekUI();
+  closeSidebar();
+  scheduleSessionSave();
+  return { name, itemCount: items.length };
 }
 
 function isSupportedVideoFile(file) {
@@ -1318,50 +1469,26 @@ fileInput.addEventListener('change', async e => {
 
 exportMetaBtn.addEventListener('click', async () => {
   if (!currentPlaylist) return alert('プレイリストを選択してください');
-  const pl = await getCurrentPlaylist();
-  if (!pl) return;
-
-  const exportObj = { name: pl.name, items: [] };
-  for (const id of pl.items) {
-    const meta = await idbGet(STORE_VIDEOS, id);
-    if (!meta) continue;
-    exportObj.items.push({
-      id: meta.id,
-      name: meta.name,
-      duration: meta.duration,
-      mimeType: meta.mimeType || 'video/mp4',
-      size: meta.size,
-      thumbnail: meta.thumbnail
-    });
-  }
-
+  const exportObj = await buildPlaylistExport(false);
   const blob = new Blob([JSON.stringify(exportObj)], { type: 'application/json' });
-  downloadBlob(blob, `${pl.name}.playlist.json`);
+  downloadBlob(blob, `${sanitizeFilename(exportObj.name)}.playlist.json`);
 });
 
 exportWithBlobsBtn.addEventListener('click', async () => {
   if (!currentPlaylist) return alert('プレイリストを選択してください');
-  const pl = await getCurrentPlaylist();
-  if (!pl) return;
-
-  const exportObj = { name: pl.name, items: [] };
-  for (const id of pl.items) {
-    const meta = await idbGet(STORE_VIDEOS, id);
-    if (!meta || !meta.blob) continue;
-    const base = await blobToBase64(meta.blob);
-    exportObj.items.push({
-      id: meta.id,
-      name: meta.name,
-      duration: meta.duration,
-      mimeType: meta.mimeType || 'video/mp4',
-      size: meta.size,
-      thumbnail: meta.thumbnail,
-      blobBase64: base
-    });
+  try {
+    await assertEmbeddedExportIsSafe();
+    const exportObj = await buildPlaylistExport(true);
+    const blob = new Blob([JSON.stringify(exportObj)], { type: 'application/json' });
+    downloadBlob(blob, `${sanitizeFilename(exportObj.name)}.playlist.full.json`);
+  } catch (error) {
+    console.error(error);
+    if (error?.message === 'embedded-export-too-large-for-device') {
+      alert('このプレイリストは動画の合計サイズが大きく、この端末では埋め込みエクスポートに失敗する可能性があります。動画を減らすか、埋め込みなしのエクスポートをお使いください。');
+    } else {
+      alert('エクスポートに失敗しました');
+    }
   }
-
-  const blob = new Blob([JSON.stringify(exportObj)], { type: 'application/json' });
-  downloadBlob(blob, `${pl.name}.playlist.full.json`);
 });
 
 importFile.addEventListener('change', async (e) => {
@@ -1369,54 +1496,97 @@ importFile.addEventListener('change', async (e) => {
   if (!f) return;
 
   try {
-    if (f.size > MAX_IMPORTED_JSON_BYTES) throw new Error('file-too-large');
+    const maxBytes = f.name.toLowerCase().endsWith(SHARE_PACKAGE_EXTENSION)
+      ? MAX_SHARED_PACKAGE_BYTES
+      : MAX_IMPORTED_JSON_BYTES;
+    if (f.size > maxBytes) throw new Error('file-too-large');
 
     const obj = JSON.parse(await f.text());
     if (!obj || typeof obj !== 'object') throw new Error('invalid');
 
-    const baseName = normalizePlaylistName(obj.name);
-    if (!baseName || !Array.isArray(obj.items)) throw new Error('invalid');
-
-    const name = `${baseName} (import)`;
-    const items = [];
-
-    for (const it of obj.items.slice(0, MAX_IMPORTED_ITEMS)) {
-      if (!it || typeof it !== 'object') continue;
-
-      const id = safeText(String(it.id || '')) || uid();
-      const metaName = normalizePlaylistName(it.name) || 'video';
-      const duration = clampNumber(Number(it.duration), 0);
-      const size = clampNumber(Number(it.size), 0);
-      const thumbnail = safeThumbnailSrc(it.thumbnail);
-      const mimeType = sanitizeMimeType(it.mimeType);
-
-      if (typeof it.blobBase64 === 'string' && it.blobBase64.length > 0) {
-        const blob = base64ToBlob(it.blobBase64, mimeType);
-        const meta = { id, name: metaName, duration, mimeType, blob, thumbnail, size };
-        await idbPut(STORE_VIDEOS, meta);
-        videoListCache[id] = meta;
-        items.push(id);
-      } else {
-        const meta = { id, name: metaName, duration, mimeType, blob: null, thumbnail, size };
-        await idbPut(STORE_VIDEOS, meta);
-        videoListCache[id] = meta;
-        items.push(id);
-      }
-    }
-
-    await idbPut(STORE_PLAYLISTS, { name, items });
-    currentPlaylist = name;
-    currentIndex = 0;
-    await refreshPlaylistsUI();
-    await refreshTrackList();
-    await updateTotalDuration();
-    updateSeekUI();
-    scheduleSessionSave();
+    await importPlaylistPayload(obj, ' (import)');
   } catch (err) {
     alert('インポートに失敗しました');
   }
 
   importFile.value = '';
+});
+
+sharePlaylistBtn?.addEventListener('click', async () => {
+  if (!currentPlaylist) {
+    alert('共有するプレイリストを選択してください');
+    return;
+  }
+  await openShareModal();
+});
+
+closeShareBtn?.addEventListener('click', closeShareModal);
+
+shareModal?.addEventListener('click', (event) => {
+  if (event.target === shareModal) closeShareModal();
+});
+
+downloadSharePackageBtn?.addEventListener('click', async () => {
+  try {
+    setShareStatus('共有ファイルを作成しています。動画の容量によっては時間がかかります。');
+    downloadSharePackageBtn.disabled = true;
+    await assertEmbeddedExportIsSafe();
+    const playlist = await buildPlaylistExport(true);
+    const sharePackage = {
+      format: 'playpocket-share',
+      version: 1,
+      mediaIncluded: true,
+      ...playlist
+    };
+    const packageBlob = new Blob([JSON.stringify(sharePackage)], { type: 'application/json' });
+    if (packageBlob.size > MAX_SHARED_PACKAGE_BYTES) throw new Error('share-package-too-large');
+    downloadBlob(packageBlob, `${sanitizeFilename(playlist.name)}${SHARE_PACKAGE_EXTENSION}`);
+    setShareStatus('共有ファイルを端末に保存しました。ファイルアプリなどから他のアプリに送信してください。', 'success');
+  } catch (error) {
+    console.error(error);
+    let message = '共有ファイルを作成できませんでした。動画の容量を確認して、もう一度試してください。';
+    if (error?.message === 'share-package-too-large') {
+      message = '共有ファイルは 500MB までです。動画を減らして、もう一度試してください。';
+    } else if (error?.message === 'embedded-export-too-large-for-device') {
+      message = 'この端末では動画の合計サイズが大きすぎて共有ファイルを作成できません。動画を減らすか、軽量共有コードをお使いください。';
+    }
+    setShareStatus(message, 'error');
+  } finally {
+    downloadSharePackageBtn.disabled = false;
+  }
+});
+
+copyShareCodeBtn?.addEventListener('click', async () => {
+  try {
+    const playlist = await buildPlaylistExport(false);
+    const codePlaylist = {
+      name: playlist.name,
+      items: playlist.items.map(({ name, duration, mimeType, size }) => ({ name, duration, mimeType, size }))
+    };
+    const code = window.PlayPocketShare.createCode({
+      version: 1,
+      kind: 'playlist-metadata',
+      playlist: codePlaylist
+    });
+    await window.PlayPocketShare.copyText(code);
+    setShareStatus('共有コードをコピーしました。動画データは含まれません。', 'success');
+  } catch (error) {
+    console.error(error);
+    setShareStatus('共有コードをコピーできませんでした。プレイリストを短くして、もう一度試してください。', 'error');
+  }
+});
+
+importShareCodeBtn?.addEventListener('click', async () => {
+  try {
+    const decoded = window.PlayPocketShare.parseCode(shareCodeInput?.value || '');
+    if (decoded?.version !== 1 || decoded?.kind !== 'playlist-metadata') throw new Error('invalid-share-code');
+    const imported = await importPlaylistPayload(decoded.playlist, ' (shared)');
+    if (shareCodeInput) shareCodeInput.value = '';
+    setShareStatus(`「${imported.name}」を読み込みました。動画データは含まれません。`, 'success');
+  } catch (error) {
+    console.error(error);
+    setShareStatus('共有コードを読み込めませんでした。コード全体を貼り付けてください。', 'error');
+  }
 });
 
 videoPlayer.addEventListener('loadedmetadata', () => {
