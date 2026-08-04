@@ -8,119 +8,59 @@
 </head>
 <body>
   <div class="bg"></div>
-  <div class="ambient ambient-a"></div>
-  <div class="ambient ambient-b"></div>
 
   <main class="app-shell">
     <header class="topbar card">
       <div class="brand">
         <img id="heroIcon" class="logo-img" alt="PlayPocket" />
-        <div>
+        <div class="brand-copy">
           <p class="eyebrow">PlayPocket Installer</p>
           <h1>PlayPocket をインストール</h1>
+          <p class="subline">PlayPocketのインストール・更新・修復・アンインストール</p>
         </div>
-      </div>
-
-      <div class="topbar-actions">
-        <button id="refreshBtn" class="btn btn-ghost">更新</button>
-        <button id="clearLog" class="btn btn-ghost">ログ消去</button>
       </div>
     </header>
 
-    <section class="hero-grid">
-      <section class="card hero-copy">
-        <p class="section-label">概要</p>
-        <p class="lead">
-          release フォルダ内の最新 exe と同梱ファイルを使って、インストール・修復・更新・アンインストールを行います。
-        </p>
-
-        <div class="status-row">
-          <div class="status-pill" id="sourceState">ソース: 読み込み中</div>
-          <div class="status-pill" id="installState">インストール先: 読み込み中</div>
-          <div class="status-pill" id="statusText">状態: 待機中</div>
+    <section class="card main-panel">
+      <div class="panel-header">
+        <div>
+          <p class="section-label">インストール先</p>
+          <h2>PlayPocketのインストール先</h2>
         </div>
-      </section>
+        <div id="statusText" class="status-badge">準備中</div>
+      </div>
 
-      <section class="card quick-stats">
-        <div class="stat">
-          <span>release 内の最新 exe</span>
-          <strong id="sourceExe">-</strong>
-        </div>
-        <div class="stat">
-          <span>インストール済み exe</span>
-          <strong id="installedExe">-</strong>
-        </div>
-      </section>
-    </section>
-
-    <section class="content-grid">
-      <section class="card panel">
-        <div class="dir-card">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">ソース</p>
-              <h2>release フォルダ</h2>
-            </div>
-            <button id="browseSource" class="btn btn-ghost">参照</button>
-          </div>
-
-          <div class="input-row">
-            <input id="sourceDir" type="text" spellcheck="false" />
-            <button id="openSource" class="btn btn-ghost">開く</button>
-          </div>
-
-          <p class="hint">このフォルダ内から最新の exe を検出します。</p>
-        </div>
-
-        <div class="dir-card">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">インストール先</p>
-              <h2>保存先フォルダ</h2>
-            </div>
-            <button id="browseInstall" class="btn btn-ghost">参照</button>
-          </div>
-
-          <div class="input-row">
-            <input id="installDir" type="text" spellcheck="false" />
-            <button id="openInstall" class="btn btn-ghost">開く</button>
-          </div>
-
-          <p class="hint">既定はローカルアプリケーションフォルダです。</p>
-        </div>
-
-        <div class="panel-divider"></div>
-
-        <div class="action-grid">
-          <button id="installBtn" class="btn btn-primary">インストール</button>
-          <button id="repairBtn" class="btn btn-secondary">修復</button>
-          <button id="updateBtn" class="btn btn-secondary">アップデート</button>
-          <button id="uninstallBtn" class="btn btn-danger">アンインストール</button>
-        </div>
-      </section>
-
-      <section class="card panel log-panel">
-        <div class="panel-header">
+      <div class="dir-card">
+        <div class="dir-head">
           <div>
-            <p class="section-label">ログ</p>
-            <h2>処理状況</h2>
+            <p class="dir-title">保存先フォルダ</p>
+            <p class="dir-desc">既定で通常のアプリが入る場所を選択済み</p>
           </div>
-          <button id="refreshBtn2" class="btn btn-ghost">状態更新</button>
+          <button id="browseInstall" class="btn btn-ghost" type="button">変更</button>
         </div>
-
-        <div class="log-meta">
-          <div class="meta-box">
-            <span>ソース</span>
-            <strong id="sourceState2">-</strong>
-          </div>
-          <div class="meta-box">
-            <span>インストール先</span>
-            <strong id="installState2">-</strong>
-          </div>
+        <div class="input-row">
+          <input id="installDir" type="text" spellcheck="false" />
+          <button id="openInstall" class="btn btn-ghost" type="button">開く</button>
         </div>
+      </div>
 
-        <pre id="log"></pre>
-      </section>
+      <div class="progress-card">
+        <div class="progress-head">
+          <div id="progressTitle">待機中</div>
+          <div id="progressPercent">0%</div>
+        </div>
+        <div class="progress-track">
+          <div id="progressBar" class="progress-bar"></div>
+        </div>
+        <div id="progressDetail" class="progress-detail">操作を開始すると進捗が表示されます。</div>
+      </div>
+
+      <div class="action-grid">
+        <button id="installBtn" class="btn btn-primary" type="button">インストール</button>
+        <button id="updateBtn" class="btn btn-secondary" type="button">アップデート</button>
+        <button id="repairBtn" class="btn btn-secondary" type="button">修復</button>
+        <button id="uninstallBtn" class="btn btn-danger" type="button">アンインストール</button>
+      </div>
     </section>
   </main>
 
