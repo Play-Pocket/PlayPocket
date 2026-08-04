@@ -2,7 +2,6 @@
 
 ![version](https://img.shields.io/github/v/release/Play-Pocket/PlayPocket?label=version)
 ![downloads](https://img.shields.io/github/downloads/Play-Pocket/PlayPocket/total)
-![license](https://img.shields.io/github/license/Play-Pocket/PlayPocket)
 ![made-with](https://img.shields.io/badge/Made%20with-Electron-9feaf9)
 
 ---
