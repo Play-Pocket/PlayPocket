@@ -301,11 +301,13 @@ function showMainWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  updateTrayMenu();
 }
 
 function hideMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.hide();
+  updateTrayMenu();
 }
 
 function toggleMainWindow() {
@@ -472,9 +474,13 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   mainWindow.on('close', (e) => {
-    if (!isQuitting && (settings.trayEnabled || settings.minimizeOnClose)) {
+    if (isQuitting) return;
+
+    if (settings.trayEnabled) {
       e.preventDefault();
       hideMainWindow();
+    } else if (settings.minimizeOnClose) {
+      e.preventDefault();
       try { mainWindow.minimize(); } catch (err) {}
     }
   });
