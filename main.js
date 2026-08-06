@@ -198,11 +198,6 @@ function resolveAppIcon() {
   return null;
 }
 
-function isSafePath(base, full) {
-  const rel = path.relative(base, full);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-}
-
 function shutdownRPC() {
   if (!rpc) return;
   try { rpc.clearActivity(); } catch (e) {}
@@ -358,6 +353,33 @@ function captureWindowBounds() {
   });
 }
 
+function isMainWindowSender(event) {
+  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+}
+
+function requireMainWindowSender(event) {
+  if (!isMainWindowSender(event)) {
+    throw new Error('Unauthorized IPC sender');
+  }
+}
+
+function isOfficialSiteUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'playpocket.f5.si' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedPermissionRequest(webContents, permission) {
+  return permission === 'clipboard-sanitized-write' &&
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    webContents === mainWindow.webContents &&
+    webContents.getURL().startsWith('file:');
+}
+
 let settings = loadSettings();
 let runtimeState = loadRuntimeState();
 let rpc = null;
@@ -439,7 +461,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false
     }
   };
 
@@ -450,28 +475,8 @@ function createWindow() {
 
   mainWindow = new BrowserWindow(windowOptions);
 
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          [
-            "default-src 'self' blob: data:",
-            "img-src 'self' blob: data:",
-            "media-src 'self' blob: data:",
-            "style-src 'self' 'unsafe-inline'",
-            "script-src 'self'",
-            "connect-src 'self'",
-            "object-src 'none'",
-            "base-uri 'none'",
-            "form-action 'none'"
-          ].join('; ')
-        ]
-      }
-    });
-  });
-
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
 
   mainWindow.on('close', (e) => {
     if (isQuitting) return;
@@ -493,11 +498,7 @@ function createWindow() {
   Menu.setApplicationMenu(null);
 
   const indexPath = path.resolve(__dirname, 'app', 'index.html');
-  if (!fs.existsSync(indexPath)) {
-    mainWindow.loadURL('data:text/html,<h2>index.htmlが無い</h2>');
-  } else {
-    mainWindow.loadURL(`file://${indexPath.replace(/\\/g, '/')}`);
-  }
+  mainWindow.loadFile(indexPath);
 
   mainWindow.once('ready-to-show', () => {
     if (settings.restoreLastState && savedBounds?.maximized) {
@@ -512,7 +513,8 @@ function createWindow() {
   });
 }
 
-ipcMain.on('set-rpc', (_, data = {}) => {
+ipcMain.on('set-rpc', (event, data = {}) => {
+  if (!isMainWindowSender(event)) return;
   if (!rpc || !settings.rpcEnabled) return;
 
   if (data?.paused) {
@@ -541,7 +543,8 @@ ipcMain.on('set-rpc', (_, data = {}) => {
   }
 });
 
-ipcMain.on('clear-rpc', () => {
+ipcMain.on('clear-rpc', (event) => {
+  if (!isMainWindowSender(event)) return;
   if (!rpc || !settings.rpcEnabled) return;
   try {
     rpc.clearActivity();
@@ -550,16 +553,21 @@ ipcMain.on('clear-rpc', () => {
   }
 });
 
-ipcMain.handle('get-settings', () => settings);
+ipcMain.handle('get-settings', (event) => {
+  requireMainWindowSender(event);
+  return settings;
+});
 
-ipcMain.handle('get-startup-state', () => {
+ipcMain.handle('get-startup-state', (event) => {
+  requireMainWindowSender(event);
   return {
     settings,
     runtimeState
   };
 });
 
-ipcMain.handle('set-settings', async (_, partial = {}) => {
+ipcMain.handle('set-settings', async (event, partial = {}) => {
+  requireMainWindowSender(event);
   const next = {
     ...settings,
     ...sanitizeSettingsInput(partial)
@@ -603,19 +611,21 @@ ipcMain.handle('set-settings', async (_, partial = {}) => {
   return settings;
 });
 
-ipcMain.handle('save-runtime-state', async (_, partial = {}) => {
+ipcMain.handle('save-runtime-state', async (event, partial = {}) => {
+  requireMainWindowSender(event);
   const next = mergeRuntimeState(partial);
   return next;
 });
 
-ipcMain.handle('clear-browser-cache', async () => {
+ipcMain.handle('clear-browser-cache', async (event) => {
+  requireMainWindowSender(event);
   await session.defaultSession.clearCache();
   return true;
 });
 
-ipcMain.handle('open-external', async (_, url) => {
-  if (typeof url !== 'string') return false;
-  if (!/^https?:\/\//i.test(url)) return false;
+ipcMain.handle('open-external', async (event, url) => {
+  requireMainWindowSender(event);
+  if (!isOfficialSiteUrl(url)) return false;
   await shell.openExternal(url);
   return true;
 });
@@ -625,6 +635,12 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(isAllowedPermissionRequest(webContents, permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    return Boolean(webContents && isAllowedPermissionRequest(webContents, permission));
+  });
   applyStartupSetting(settings.startupLaunch);
   ensureRPCState();
   createWindow();
@@ -657,46 +673,6 @@ app.on('before-quit', () => {
 app.on('window-all-closed', () => {
   if (settings.trayEnabled) return;
   if (process.platform !== 'darwin') app.quit();
-});
-
-ipcMain.handle('read-file', async (_, relativePath) => {
-  try {
-    if (typeof relativePath !== 'string') throw new Error('Invalid path type');
-    const base = APP_DATA_DIR;
-    const full = path.resolve(base, relativePath);
-    if (!isSafePath(base, full)) throw new Error('Access denied');
-    return fs.readFileSync(full, 'utf8');
-  } catch (e) {
-    console.error('read-file error:', e);
-    throw e;
-  }
-});
-
-ipcMain.handle('write-file', async (_, relativePath, data) => {
-  try {
-    if (typeof relativePath !== 'string') throw new Error('Invalid path type');
-    if (typeof data !== 'string') throw new Error('Invalid data type: data must be a string');
-    const base = APP_DATA_DIR;
-    const full = path.resolve(base, relativePath);
-    if (!isSafePath(base, full)) throw new Error('Access denied');
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, data, 'utf8');
-    return true;
-  } catch (e) {
-    console.error('write-file error:', e);
-    throw e;
-  }
-});
-
-ipcMain.handle('get-app-paths', () => {
-  return {
-    userData: app.getPath('userData'),
-    appData: app.getPath('appData'),
-    home: app.getPath('home'),
-    temp: app.getPath('temp'),
-    desktop: app.getPath('desktop'),
-    documents: app.getPath('documents')
-  };
 });
 
 process.on('uncaughtException', (err) => {
