@@ -1,6 +1,6 @@
 {
   "name": "playpocket-installer",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "PlayPocket installer",
   "main": "main.js",
   "author": "Takkunlego0916",
@@ -11,7 +11,7 @@
     "dist": "electron-builder --win portable --publish never"
   },
   "devDependencies": {
-    "electron": "^41.7.1",
+    "electron": "^41.10.3",
     "electron-builder": "^26.15.3"
   },
   "build": {
@@ -28,10 +28,6 @@
       "package.json"
     ],
     "extraResources": [
-      {
-        "from": "release",
-        "to": "release"
-      },
       {
         "from": "build/icon.ico",
         "to": "icon.ico"
