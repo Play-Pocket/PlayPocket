@@ -149,7 +149,7 @@ browseInstallBtn.addEventListener('click', async () => {
 
 openInstallBtn.addEventListener('click', async () => {
   try {
-    await window.installer.openInstallDir();
+    await window.installer.openInstallDir(installDirEl.value.trim());
   } catch (error) {
     setProgress({
       percent: 0,
