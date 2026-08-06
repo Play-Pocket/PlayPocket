@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -7,7 +7,9 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { pathToFileURL } = require('url');
 const { Readable } = require('stream');
+const { Transform } = require('stream');
 const { pipeline } = require('stream/promises');
+const crypto = require('crypto');
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +23,8 @@ const GITHUB_ASSET_NAME = process.env.GITHUB_ASSET_NAME || '';
 const GITHUB_ASSET_REGEX = process.env.GITHUB_ASSET_REGEX || '^PlayPocket\\.[0-9]+\\.[0-9]+\\.[0-9]+\\.exe$';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_API_VERSION = process.env.GITHUB_API_VERSION || '2026-03-10';
+const INSTALL_MANIFEST_FILE = '.playpocket-install.json';
+const MAX_RELEASE_ASSET_BYTES = 2 * 1024 * 1024 * 1024;
 
 if (process.platform === 'win32') {
   try {
@@ -32,6 +36,7 @@ let mainWindow = null;
 let state = {
   installDir: ''
 };
+let activeAction = null;
 
 function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
@@ -64,6 +69,20 @@ function getStartMenuShortcutPath() {
 
 function getUninstallShortcutPath() {
   return path.join(getStartMenuShortcutDir(), `${PRODUCT_NAME} アンインストール.lnk`);
+}
+
+function getInstallManifestPath(installDir) {
+  return path.join(installDir, INSTALL_MANIFEST_FILE);
+}
+
+function isMainWindowSender(event) {
+  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+}
+
+function requireMainWindowSender(event) {
+  if (!isMainWindowSender(event)) {
+    throw new Error('Unauthorized IPC sender');
+  }
 }
 
 function getInstallerIconPath() {
@@ -145,8 +164,12 @@ async function writeJson(filePath, value) {
 
 async function loadState() {
   const saved = await readJson(getStatePath(), {});
+  let installDir = getDefaultInstallDir();
+  try {
+    installDir = normalizeInstallDir(saved.installDir, installDir);
+  } catch {}
   state = {
-    installDir: typeof saved.installDir === 'string' && saved.installDir ? saved.installDir : getDefaultInstallDir()
+    installDir
   };
   return state;
 }
@@ -158,6 +181,62 @@ async function saveState(next = {}) {
   };
   await writeJson(getStatePath(), state);
   return state;
+}
+
+function normalizeInstallDir(value, fallback = '') {
+  const candidate = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  if (!candidate) {
+    throw new Error('インストール先を指定してください');
+  }
+
+  const resolved = path.resolve(candidate);
+  if (resolved === path.parse(resolved).root) {
+    throw new Error('ドライブ直下はインストール先に指定できません');
+  }
+
+  return resolved;
+}
+
+async function getDirectoryEntries(dir) {
+  try {
+    return await fsp.readdir(dir);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function readInstallManifest(installDir) {
+  const manifest = await readJson(getInstallManifestPath(installDir), null);
+  if (!manifest || manifest.appId !== APP_ID || manifest.productName !== PRODUCT_NAME) {
+    return null;
+  }
+  return manifest;
+}
+
+async function assertInstallDirectoryCanBeReplaced(installDir) {
+  const entries = await getDirectoryEntries(installDir);
+  if (entries === null || entries.length === 0) return;
+
+  const manifest = await readInstallManifest(installDir);
+  if (!manifest) {
+    throw new Error('インストール先は空のフォルダ、または PlayPocket が管理しているフォルダを指定してください');
+  }
+}
+
+async function assertManagedInstallDirectory(installDir) {
+  if (!(await existsDir(installDir)) || !(await readInstallManifest(installDir))) {
+    throw new Error('このフォルダは PlayPocket Installer で管理されていないため削除できません');
+  }
+}
+
+async function writeInstallManifest(installDir, version) {
+  await writeJson(getInstallManifestPath(installDir), {
+    appId: APP_ID,
+    productName: PRODUCT_NAME,
+    version: version || null,
+    installedAt: new Date().toISOString()
+  });
 }
 
 async function walkFiles(dir) {
@@ -263,32 +342,44 @@ function getGitHubHeaders() {
 }
 
 function isGitHubConfigured() {
-  return Boolean(GITHUB_OWNER && GITHUB_REPO && GITHUB_OWNER !== 'YOUR_OWNER' && GITHUB_REPO !== 'YOUR_REPO');
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(GITHUB_OWNER) &&
+    /^[A-Za-z0-9_.-]+$/.test(GITHUB_REPO) &&
+    GITHUB_OWNER !== 'YOUR_OWNER' &&
+    GITHUB_REPO !== 'YOUR_REPO';
+}
+
+function isReleaseAssetAllowed(asset) {
+  if (!asset || typeof asset.name !== 'string' || typeof asset.browser_download_url !== 'string') return false;
+  if (asset.state !== 'uploaded' || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_RELEASE_ASSET_BYTES) return false;
+  if (path.basename(asset.name) !== asset.name || /[\\/]/.test(asset.name)) return false;
+  return /\.(exe|zip)$/i.test(asset.name);
 }
 
 function selectReleaseAsset(assets) {
   if (!Array.isArray(assets) || !assets.length) return null;
+  const candidates = assets.filter(isReleaseAssetAllowed);
+  if (!candidates.length) return null;
 
   if (GITHUB_ASSET_NAME) {
-    const exact = assets.find((asset) => asset.name === GITHUB_ASSET_NAME);
+    const exact = candidates.find((asset) => asset.name === GITHUB_ASSET_NAME);
     if (exact) return exact;
   }
 
   if (GITHUB_ASSET_REGEX) {
     try {
       const regex = new RegExp(GITHUB_ASSET_REGEX, 'i');
-      const matched = assets.find((asset) => regex.test(asset.name));
+      const matched = candidates.find((asset) => regex.test(asset.name));
       if (matched) return matched;
     } catch {}
   }
 
-  const exeAsset = assets.find((asset) => asset.name.toLowerCase().endsWith('.exe'));
+  const exeAsset = candidates.find((asset) => asset.name.toLowerCase().endsWith('.exe'));
   if (exeAsset) return exeAsset;
 
-  const zipAsset = assets.find((asset) => asset.name.toLowerCase().endsWith('.zip'));
+  const zipAsset = candidates.find((asset) => asset.name.toLowerCase().endsWith('.zip'));
   if (zipAsset) return zipAsset;
 
-  return assets[0];
+  return null;
 }
 
 function getReleaseVersion(release, asset) {
@@ -313,10 +404,37 @@ async function fetchLatestRelease() {
     throw new Error(`GitHub API エラー: ${response.status} ${response.statusText}`);
   }
 
-  return response.json();
+  const release = await response.json();
+  if (!release || typeof release !== 'object' || release.draft || release.prerelease) {
+    throw new Error('利用可能な安定版リリースが見つかりません');
+  }
+  return release;
 }
 
-async function downloadToFile(url, destPath, onProgress) {
+function assertTrustedReleaseUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('無効なリリースダウンロード URL です');
+  }
+
+  const trustedHost = parsed.hostname === 'github.com' || parsed.hostname.endsWith('.githubusercontent.com');
+  if (parsed.protocol !== 'https:' || !trustedHost || parsed.username || parsed.password) {
+    throw new Error('信頼できないリリースダウンロード URL です');
+  }
+}
+
+function parseSha256Digest(digest) {
+  const match = typeof digest === 'string' && digest.match(/^sha256:([a-f0-9]{64})$/i);
+  if (!match) {
+    throw new Error('リリースアセットに SHA-256 ダイジェストがありません');
+  }
+  return match[1].toLowerCase();
+}
+
+async function downloadToFile(url, destPath, expectedSize, expectedDigest, onProgress) {
+  assertTrustedReleaseUrl(url);
   const response = await fetch(url, {
     headers: {
       ...getGitHubHeaders(),
@@ -332,37 +450,48 @@ async function downloadToFile(url, destPath, onProgress) {
     throw new Error('ダウンロードデータを取得できませんでした');
   }
 
+  assertTrustedReleaseUrl(response.url);
   const total = Number(response.headers.get('content-length') || 0);
-  let received = 0;
-
-  const reader = response.body.getReader();
-  await ensureDir(path.dirname(destPath));
-  const file = fs.createWriteStream(destPath);
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      file.write(Buffer.from(value));
-      if (typeof onProgress === 'function') {
-        const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null;
-        onProgress({
-          phase: 'download',
-          percent,
-          loaded: received,
-          total
-        });
-      }
-    }
-  } finally {
-    file.end();
+  if (total > 0 && total !== expectedSize) {
+    throw new Error('ダウンロードサイズがリリース情報と一致しません');
   }
 
-  await new Promise((resolve, reject) => {
-    file.on('finish', resolve);
-    file.on('error', reject);
+  let received = 0;
+  const hash = crypto.createHash('sha256');
+  const meter = new Transform({
+    transform(chunk, encoding, callback) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+      received += buffer.length;
+      hash.update(buffer);
+      if (typeof onProgress === 'function') {
+        onProgress({
+          phase: 'download',
+          percent: expectedSize > 0 ? Math.min(100, Math.round((received / expectedSize) * 100)) : null,
+          loaded: received,
+          total: expectedSize
+        });
+      }
+      callback(null, buffer);
+    }
   });
+
+  await ensureDir(path.dirname(destPath));
+
+  try {
+    await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(destPath, { flags: 'wx' }));
+  } catch (error) {
+    await removeFileSafe(destPath);
+    throw error;
+  }
+
+  if (received !== expectedSize) {
+    await removeFileSafe(destPath);
+    throw new Error('ダウンロードサイズがリリース情報と一致しません');
+  }
+  if (hash.digest('hex').toLowerCase() !== expectedDigest) {
+    await removeFileSafe(destPath);
+    throw new Error('ダウンロードしたファイルの SHA-256 検証に失敗しました');
+  }
 }
 
 async function expandZip(zipPath, destDir) {
@@ -398,6 +527,7 @@ async function prepareGithubSource() {
   await ensureDir(workDir);
 
   const downloadedPath = path.join(workDir, asset.name);
+  const expectedDigest = parseSha256Digest(asset.digest);
   sendProgress({
     phase: 'download',
     percent: 0,
@@ -405,7 +535,7 @@ async function prepareGithubSource() {
     detail: asset.name
   });
 
-  await downloadToFile(asset.browser_download_url, downloadedPath, (info) => {
+  await downloadToFile(asset.browser_download_url, downloadedPath, asset.size, expectedDigest, (info) => {
     sendProgress({
       phase: 'download',
       percent: info.percent,
@@ -436,7 +566,7 @@ async function prepareGithubSource() {
   };
 }
 
-async function copyReleaseToInstall(sourceDir, installDir) {
+async function copyReleaseToInstall(sourceDir, installDir, version) {
   const sourceStat = await fsp.stat(sourceDir);
   if (!sourceStat.isDirectory()) {
     throw new Error('sourceDir is not a directory');
@@ -456,14 +586,35 @@ async function copyReleaseToInstall(sourceDir, installDir) {
     detail: 'ファイルを配置しています'
   });
 
-  await removeDirSafe(installDir);
-  await ensureDir(path.dirname(installDir));
+  await assertInstallDirectoryCanBeReplaced(installDir);
+  const parentDir = path.dirname(resolvedInstall);
+  const operationId = crypto.randomUUID();
+  const stagingDir = path.join(parentDir, `.${INSTALL_FOLDER_NAME}-staging-${operationId}`);
+  const backupDir = path.join(parentDir, `.${INSTALL_FOLDER_NAME}-backup-${operationId}`);
+  const installExists = await existsDir(installDir);
 
-  await fsp.cp(sourceDir, installDir, {
-    recursive: true,
-    force: true,
-    preserveTimestamps: true
-  });
+  await ensureDir(parentDir);
+  try {
+    await fsp.cp(sourceDir, stagingDir, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      preserveTimestamps: true
+    });
+    await writeInstallManifest(stagingDir, version);
+    if (installExists) {
+      await fsp.rename(installDir, backupDir);
+    }
+    await fsp.rename(stagingDir, installDir);
+  } catch (error) {
+    if (installExists && !(await existsDir(installDir)) && await existsDir(backupDir)) {
+      await fsp.rename(backupDir, installDir).catch(() => {});
+    }
+    throw error;
+  } finally {
+    await removeDirSafe(stagingDir);
+  }
+  await removeDirSafe(backupDir);
 }
 
 async function getInstalledExe(installDir) {
@@ -523,7 +674,8 @@ async function performInstallLike(action, payload = {}) {
     throw new Error('GitHub_OWNER と GITHUB_REPO を設定してください');
   }
 
-  const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
+  const installDir = normalizeInstallDir(payload?.installDir, state.installDir || getDefaultInstallDir());
+  await assertInstallDirectoryCanBeReplaced(installDir);
   await saveState({ installDir });
 
   const source = await prepareGithubSource();
@@ -539,7 +691,7 @@ async function performInstallLike(action, payload = {}) {
     detail: latest.name
   });
 
-  await copyReleaseToInstall(source.sourceDir, installDir);
+  await copyReleaseToInstall(source.sourceDir, installDir, source.version);
   await syncShortcuts(installDir);
 
   return {
@@ -556,7 +708,8 @@ async function performUpdate(payload = {}) {
     throw new Error('GitHub_OWNER と GITHUB_REPO を設定してください');
   }
 
-  const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
+  const installDir = normalizeInstallDir(payload?.installDir, state.installDir || getDefaultInstallDir());
+  await assertInstallDirectoryCanBeReplaced(installDir);
   await saveState({ installDir });
 
   const release = await fetchLatestRelease();
@@ -580,14 +733,15 @@ async function performUpdate(payload = {}) {
     throw new Error('ダウンロードしたアセット内に exe が見つかりません');
   }
 
-  await copyReleaseToInstall(source.sourceDir, installDir);
+  await copyReleaseToInstall(source.sourceDir, installDir, source.version);
   await syncShortcuts(installDir);
 
   return { action: 'update', message: 'アップデートが完了しました' };
 }
 
 async function performUninstall(payload = {}) {
-  const installDir = typeof payload.installDir === 'string' && payload.installDir ? payload.installDir : state.installDir || getDefaultInstallDir();
+  const installDir = normalizeInstallDir(payload?.installDir, state.installDir || getDefaultInstallDir());
+  await assertManagedInstallDirectory(installDir);
 
   sendProgress({
     phase: 'uninstall',
@@ -630,33 +784,78 @@ function createWindow() {
     }
   });
 
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
-ipcMain.handle('installer:get-status', async () => buildStatus());
+async function runInstallerAction(action, callback) {
+  if (activeAction) {
+    throw new Error(`${activeAction} の処理中です`);
+  }
+  activeAction = action;
+  try {
+    return await callback();
+  } finally {
+    activeAction = null;
+  }
+}
 
-ipcMain.handle('installer:get-icon-path', async () => {
+ipcMain.handle('installer:get-status', async (event) => {
+  requireMainWindowSender(event);
+  return buildStatus();
+});
+
+ipcMain.handle('installer:get-icon-path', async (event) => {
+  requireMainWindowSender(event);
   return getInstallerIconDataUrl();
 });
 
-ipcMain.handle('installer:choose-install-dir', async () => chooseInstallDir());
+ipcMain.handle('installer:choose-install-dir', async (event) => {
+  requireMainWindowSender(event);
+  return chooseInstallDir();
+});
 
-ipcMain.handle('installer:set-install-dir', async (_, installDir) => {
-  if (typeof installDir !== 'string' || !installDir.trim()) return false;
-  await saveState({ installDir: installDir.trim() });
+ipcMain.handle('installer:set-install-dir', async (event, installDir) => {
+  requireMainWindowSender(event);
+  await saveState({ installDir: normalizeInstallDir(installDir) });
   return true;
 });
 
-ipcMain.handle('installer:install', async (_, payload) => performInstallLike('install', payload));
-ipcMain.handle('installer:repair', async (_, payload) => performInstallLike('repair', payload));
-ipcMain.handle('installer:update', async (_, payload) => performUpdate(payload));
-ipcMain.handle('installer:uninstall', async (_, payload) => performUninstall(payload));
+ipcMain.handle('installer:install', async (event, payload) => {
+  requireMainWindowSender(event);
+  return runInstallerAction('インストール', () => performInstallLike('install', payload));
+});
+ipcMain.handle('installer:repair', async (event, payload) => {
+  requireMainWindowSender(event);
+  return runInstallerAction('修復', () => performInstallLike('repair', payload));
+});
+ipcMain.handle('installer:update', async (event, payload) => {
+  requireMainWindowSender(event);
+  return runInstallerAction('アップデート', () => performUpdate(payload));
+});
+ipcMain.handle('installer:uninstall', async (event, payload) => {
+  requireMainWindowSender(event);
+  return runInstallerAction('アンインストール', () => performUninstall(payload));
+});
+ipcMain.handle('installer:open-install-dir', async (event, installDir) => {
+  requireMainWindowSender(event);
+  const normalizedDir = normalizeInstallDir(installDir, state.installDir || getDefaultInstallDir());
+  if (!(await existsDir(normalizedDir))) {
+    throw new Error('インストール先フォルダが見つかりません');
+  }
+  const errorMessage = await shell.openPath(normalizedDir);
+  if (errorMessage) throw new Error(errorMessage);
+  return true;
+});
 
 app.whenReady().then(async () => {
   await loadState();
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
   createWindow();
 });
 
