@@ -1,6 +1,6 @@
 {
   "name": "PlayPocket",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Offline playlist player (PlayPocket)",
   "main": "main.js",
   "scripts": {
@@ -11,7 +11,7 @@
   "author": "Takkunlego0916",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^41.7.1",
+    "electron": "^41.10.3",
     "electron-builder": "^26.15.3"
   },
   "build": {
@@ -23,22 +23,15 @@
     "asarUnpack": [
       "node_modules/discord-rpc/**/*"
     ],
+    "npmRebuild": false,
     "files": [
       "app/**/*",
       "main.js",
       "preload.js",
       "package.json",
       "README.md",
-      "LICENSE"
-    ],
-    "extraResources": [
-      {
-        "from": "assets/",
-        "to": "assets",
-        "filter": [
-          "**/*"
-        ]
-      }
+      "LICENSE",
+      "!node_modules/register-scheme/**/*"
     ],
     "win": {
       "target": [
