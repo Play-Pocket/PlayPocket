@@ -34,19 +34,18 @@ PlayPocket は、Windows/Android向けの軽量オフラインプレイリスト
 
 ### Windows
 1. 上のダウンロードボタンをクリック
-2. `PlayPocket-Setup-1.3.2-Windows.exe` を実行
+2. `PlayPocket-Installer-1.4.1-Windows.exe` を実行
 3. インストール
 
 ### Android
 1. 上のダウンロードボタンをクリック
-2. `PlayPocket-Setup-1.3.2-Android.apk` を実行
+2. `PlayPocket-Installer-1.4.1-Android.apk` を実行
 3. インストール
 
 ---
 
-## 作成
+## 制作
 
 * Owner
   TakkunMC
   
-* Dev
