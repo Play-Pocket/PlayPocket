@@ -214,20 +214,38 @@ async function readInstallManifest(installDir) {
   return manifest;
 }
 
-async function assertInstallDirectoryCanBeReplaced(installDir) {
-  const entries = await getDirectoryEntries(installDir);
-  if (entries === null || entries.length === 0) return;
+function isLikelyProductExeName(fileName) {
+  const lower = String(fileName || '').toLowerCase();
+  return lower.includes(PRODUCT_NAME.toLowerCase());
+}
 
-  const manifest = await readInstallManifest(installDir);
-  if (!manifest) {
+async function looksLikeExistingProductInstall(installDir) {
+  const installedExe = await findLatestExe(installDir);
+  return Boolean(installedExe && isLikelyProductExeName(installedExe.name));
+}
+
+async function isDirectoryReplaceable(installDir) {
+  const entries = await getDirectoryEntries(installDir);
+  if (entries === null || entries.length === 0) return true;
+
+  if (await readInstallManifest(installDir)) return true;
+
+  return looksLikeExistingProductInstall(installDir);
+}
+
+async function assertInstallDirectoryCanBeReplaced(installDir) {
+  if (!(await isDirectoryReplaceable(installDir))) {
     throw new Error('インストール先は空のフォルダ、または PlayPocket が管理しているフォルダを指定してください');
   }
 }
 
 async function assertManagedInstallDirectory(installDir) {
-  if (!(await existsDir(installDir)) || !(await readInstallManifest(installDir))) {
+  if (!(await existsDir(installDir))) {
     throw new Error('このフォルダは PlayPocket Installer で管理されていないため削除できません');
   }
+  if (await readInstallManifest(installDir)) return;
+  if (await looksLikeExistingProductInstall(installDir)) return;
+  throw new Error('このフォルダは PlayPocket Installer で管理されていないため削除できません');
 }
 
 async function writeInstallManifest(installDir, version) {
