@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="PlayPocket/src/icons/appIcon.ico" alt="PlayPocket" width="120" />
+<img src="src/icons/appIcon.ico" alt="PlayPocket" width="120" />
 
 # PlayPocket
 
