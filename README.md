@@ -8,8 +8,6 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/Play-Pocket/PlayPocket?label=version&color=9feaf9)](https://github.com/Play-Pocket/PlayPocket/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Play-Pocket/PlayPocket/total?color=success)](https://github.com/Play-Pocket/PlayPocket/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Made with Electron](https://img.shields.io/badge/Made%20with-Electron-9feaf9?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-informational)](#-インストール)
 
 [**⬇ダウンロード**](https://github.com/Play-Pocket/PlayPocket/releases/latest)
