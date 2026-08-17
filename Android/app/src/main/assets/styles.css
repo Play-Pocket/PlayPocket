@@ -23,10 +23,38 @@ body{ overflow:hidden; -webkit-text-size-adjust:100%; -webkit-tap-highlight-colo
   flex-direction:column;
   min-height:0;
 }
+.sidebar-content,
+.playlist-right{
+  scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,0.22) transparent;
+}
+.sidebar-content::-webkit-scrollbar,
+.playlist-right::-webkit-scrollbar{
+  width:8px;
+  height:0;
+}
+.sidebar-content::-webkit-scrollbar-track,
+.playlist-right::-webkit-scrollbar-track{
+  background:transparent;
+}
+.sidebar-content::-webkit-scrollbar-thumb,
+.playlist-right::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,0.18);
+  border-radius:999px;
+  border:2px solid transparent;
+  background-clip:content-box;
+}
+.sidebar-content::-webkit-scrollbar-thumb:hover,
+.playlist-right::-webkit-scrollbar-thumb:hover{
+  background:rgba(255,255,255,0.32);
+  border:2px solid transparent;
+  background-clip:content-box;
+}
 .sidebar-content{
   flex:1;
   min-height:0;
-  overflow:auto;
+  overflow-y:auto;
+  overflow-x:hidden;
   display:flex;
   flex-direction:column;
 }
@@ -290,7 +318,8 @@ body{ overflow:hidden; -webkit-text-size-adjust:100%; -webkit-tap-highlight-colo
   background:var(--panel);
   padding:12px;
   border-radius:8px;
-  overflow:auto;
+  overflow-y:auto;
+  overflow-x:hidden;
   min-height:0;
 }
 .track-list{
@@ -305,6 +334,7 @@ body{ overflow:hidden; -webkit-text-size-adjust:100%; -webkit-tap-highlight-colo
   border-radius:6px;
   align-items:center;
   border-bottom:1px solid rgba(255,255,255,0.03);
+  transition:background-color .12s ease;
 }
 .track-item .thumb{
   width:120px;
