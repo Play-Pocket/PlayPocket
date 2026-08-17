@@ -61,7 +61,7 @@ Even without an internet connection, you can enjoy your own playlists anytime, a
 ### Windows
 
 1. Click the **[Download](https://github.com/Play-Pocket/PlayPocket/releases/latest)** button above to get the latest version
-2. Run `PlayPocket-Installer-1.4.1-Windows.exe`
+2. Run `PlayPocket-Installer-1.4.2-Windows.exe`
 3. Follow the on-screen instructions to install
 
 > After installation, you can also update, repair, or uninstall easily using the dedicated installer.
@@ -69,7 +69,7 @@ Even without an internet connection, you can enjoy your own playlists anytime, a
 ### Android
 
 1. Click the **[Download](https://github.com/Play-Pocket/PlayPocket/releases/latest)** button above to get the latest version
-2. Run `PlayPocket-Installer-1.4.1-Android.apk`
+2. Run `PlayPocket-Installer-1.4.2-Android.apk`
 3. Follow the on-screen instructions to install
 
 > You may need to allow installation of apps from unknown sources.
