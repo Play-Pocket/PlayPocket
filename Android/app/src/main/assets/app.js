@@ -1088,17 +1088,33 @@ async function refreshTrackList() {
   const pl = await getCurrentPlaylist();
   if (!pl) return;
 
-  for (const id of pl.items) {
-    if (!videoListCache[id]) {
-      const v = await idbGet(STORE_VIDEOS, id);
-      if (v) videoListCache[id] = v;
-    }
+  const missingIds = pl.items.filter(id => !videoListCache[id]);
+  if (missingIds.length > 0) {
+    const fetched = await Promise.all(missingIds.map(id => idbGet(STORE_VIDEOS, id)));
+    fetched.forEach((v, i) => { if (v) videoListCache[missingIds[i]] = v; });
   }
 
   pl.items.forEach((id, i) => {
     const meta = videoListCache[id];
     if (!meta) return;
     trackListEl.appendChild(renderTrackItem(meta, i, i === currentIndex));
+  });
+}
+
+function waitForVideoReady(video, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(finish, timeoutMs);
+    function finish() {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('loadedmetadata', finish);
+      video.removeEventListener('error', finish);
+      clearTimeout(timer);
+      resolve();
+    }
+    video.addEventListener('loadedmetadata', finish, { once: true });
+    video.addEventListener('error', finish, { once: true });
   });
 }
 
@@ -1125,13 +1141,7 @@ async function loadAndPlayById(id, options = {}) {
   const vol = parseFloat(localStorage.getItem('playerVolume') || '1');
   videoPlayer.volume = Number.isFinite(vol) ? Math.min(1, Math.max(0, vol)) : 1;
 
-  await new Promise((resolve) => {
-    if (videoPlayer.readyState >= 1) {
-      resolve();
-      return;
-    }
-    videoPlayer.addEventListener('loadedmetadata', () => resolve(), { once: true });
-  });
+  await waitForVideoReady(videoPlayer);
 
   if (resumeTime > 0 && Number.isFinite(videoPlayer.duration) && videoPlayer.duration > 0) {
     const safeTime = Math.min(resumeTime, Math.max(0, videoPlayer.duration - 0.25));
@@ -1207,7 +1217,7 @@ async function updateTotalDuration() {
 
   let total = 0;
   for (const id of pl.items) {
-    const meta = await idbGet(STORE_VIDEOS, id);
+    const meta = videoListCache[id] || await idbGet(STORE_VIDEOS, id);
     if (meta && Number.isFinite(meta.duration)) total += meta.duration;
   }
   totalDurationEl.textContent = formatTime(total);
@@ -1733,9 +1743,6 @@ if (overlay) overlay.addEventListener('click', closeSidebar);
 async function init() {
   await openDB();
 
-  const vids = await idbGetAll(STORE_VIDEOS);
-  vids.forEach(v => { if (v && v.id) videoListCache[v.id] = v; });
-
   const defaultOrFirst = await ensureDefaultPlaylist();
   const pls = await loadAllPlaylists();
   currentPlaylist = pls.length ? (normalizePlaylistName(pls[0]?.name) || pls[0].name) : defaultOrFirst;
@@ -1758,7 +1765,6 @@ async function init() {
       resumeTime: restorePlan.resumeTime
     });
     await refreshTrackList();
-    await updateTotalDuration();
   }
 
   scheduleSessionSave();
