@@ -4,15 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
     <meta http-equiv="Content-Security-Policy" content="
-    default-src 'self' blob: data:;
+    default-src 'self';
     img-src 'self' blob: data:;
     media-src 'self' blob: data:;
     style-src 'self' 'unsafe-inline';
     script-src 'self';
-    connect-src 'self';
+    connect-src 'none';
     object-src 'none';
     base-uri 'none';
-    form-action 'none'
+    form-action 'none';
+    frame-src 'none'
   ">
     <title>PlayPocket</title>
     <link rel="stylesheet" href="styles.css" />
@@ -57,7 +58,7 @@
     <main class="main" role="main">
         <header class="topbar" role="banner">
             <button id="menuToggle" class="menu-btn" type="button" aria-label="メニューを開く">☰</button>
-            <div class="search">PlayPocket 1.4.0</div>
+            <div class="search">PlayPocket 1.4.2</div>
             <div class="modes" role="tablist" aria-label="再生モード">
                 <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
                 <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
