@@ -190,12 +190,16 @@ function mergeRuntimeState(partial = {}) {
   return runtimeState;
 }
 
+let cachedAppIcon;
+
 function resolveAppIcon() {
+  if (cachedAppIcon !== undefined) return cachedAppIcon;
   const icoPath = path.join(__dirname, 'app', 'icons', 'appIcon.ico');
   const pngPath = path.join(__dirname, 'app', 'icons', 'appIcon.png');
-  if (fs.existsSync(icoPath)) return nativeImage.createFromPath(icoPath);
-  if (fs.existsSync(pngPath)) return nativeImage.createFromPath(pngPath);
-  return null;
+  if (fs.existsSync(icoPath)) cachedAppIcon = nativeImage.createFromPath(icoPath);
+  else if (fs.existsSync(pngPath)) cachedAppIcon = nativeImage.createFromPath(pngPath);
+  else cachedAppIcon = null;
+  return cachedAppIcon;
 }
 
 function shutdownRPC() {
@@ -412,6 +416,7 @@ if (!settings.cacheEnabled) {
 }
 
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+Menu.setApplicationMenu(null);
 
 function queueWindowStateSave() {
   if (!settings.restoreLastState) return;
@@ -494,8 +499,6 @@ function createWindow() {
   mainWindow.on('resize', queueWindowStateSave);
   mainWindow.on('maximize', queueWindowStateSave);
   mainWindow.on('unmaximize', queueWindowStateSave);
-
-  Menu.setApplicationMenu(null);
 
   const indexPath = path.resolve(__dirname, 'app', 'index.html');
   mainWindow.loadFile(indexPath);
@@ -641,11 +644,15 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
     return Boolean(webContents && isAllowedPermissionRequest(webContents, permission));
   });
-  applyStartupSetting(settings.startupLaunch);
-  ensureRPCState();
+
   createWindow();
   applyTraySetting();
   registerGlobalShortcuts();
+
+  setImmediate(() => {
+    applyStartupSetting(settings.startupLaunch);
+    ensureRPCState();
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
