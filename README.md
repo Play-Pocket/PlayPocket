@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src/icons/appIcon.ico" alt="PlayPocket" width="120" />
+<img src="app/icons/appIcon.png" alt="PlayPocket" width="120" />
 
 # PlayPocket
 
@@ -8,6 +8,8 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/Play-Pocket/PlayPocket?label=version&color=9feaf9)](https://github.com/Play-Pocket/PlayPocket/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Play-Pocket/PlayPocket/total?color=success)](https://github.com/Play-Pocket/PlayPocket/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Made with Electron](https://img.shields.io/badge/Made%20with-Electron-9feaf9?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-informational)](#-インストール)
 
 [**⬇ダウンロード**](https://github.com/Play-Pocket/PlayPocket/releases/latest)
@@ -62,7 +64,7 @@
 ### Windows
 
 1. 上の **[ダウンロード](https://github.com/Play-Pocket/PlayPocket/releases/latest)** ボタンから最新版をダウンロード
-2. `PlayPocket-Installer-1.4.1-Windows.exe` を実行
+2. `PlayPocket-Installer-1.4.2-Windows.exe` を実行
 3. 画面の案内に従ってインストール
 
 > インストール後は、専用インストーラーからアップデート・修復・アンインストールも簡単に行えます。
@@ -70,7 +72,7 @@
 ### Android
 
 1. 上の **[ダウンロード](https://github.com/Play-Pocket/PlayPocket/releases/latest)** ボタンから最新版をダウンロード
-2. `PlayPocket-Installer-1.4.1-Android.apk` を実行
+2. `PlayPocket-Installer-1.4.2-Android.apk` を実行
 3. 画面の案内に従ってインストール
 
 > 提供元不明のアプリのインストールを許可する必要がある場合があります。
