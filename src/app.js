@@ -912,11 +912,10 @@ async function refreshTrackList() {
   currentPlaylistSnapshot = pl && Array.isArray(pl.items) ? pl.items.slice() : [];
   if (!pl) return;
 
-  for (const id of pl.items) {
-    if (!videoListCache[id]) {
-      const v = await idbGet(STORE_VIDEOS, id);
-      if (v) videoListCache[id] = v;
-    }
+  const missingIds = pl.items.filter(id => !videoListCache[id]);
+  if (missingIds.length > 0) {
+    const fetched = await Promise.all(missingIds.map(id => idbGet(STORE_VIDEOS, id)));
+    fetched.forEach((v, i) => { if (v) videoListCache[missingIds[i]] = v; });
   }
 
   pl.items.forEach((id, i) => {
@@ -979,6 +978,23 @@ function seekFromBar() {
   scheduleRuntimeStateSave();
 }
 
+function waitForVideoReady(video, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(finish, timeoutMs);
+    function finish() {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener('loadedmetadata', finish);
+      video.removeEventListener('error', finish);
+      clearTimeout(timer);
+      resolve();
+    }
+    video.addEventListener('loadedmetadata', finish, { once: true });
+    video.addEventListener('error', finish, { once: true });
+  });
+}
+
 async function loadAndPlayById(id, options = {}) {
   const meta = await idbGet(STORE_VIDEOS, id);
   if (!meta || !meta.blob) {
@@ -1004,11 +1020,7 @@ async function loadAndPlayById(id, options = {}) {
   const vol = parseFloat(localStorage.getItem('playerVolume') || '1');
   videoPlayer.volume = Number.isFinite(vol) ? vol : 1;
 
-  await new Promise((resolve) => {
-    const done = () => resolve();
-    videoPlayer.addEventListener('loadedmetadata', done, { once: true });
-    videoPlayer.addEventListener('error', done, { once: true });
-  });
+  await waitForVideoReady(videoPlayer);
 
   if (Number.isFinite(seekTime) && seekTime > 0 && Number.isFinite(videoPlayer.duration) && videoPlayer.duration > 0) {
     const target = Math.min(seekTime, Math.max(0, videoPlayer.duration - 0.1));
@@ -1082,7 +1094,7 @@ async function updateTotalDuration() {
 
   let total = 0;
   for (const id of pl.items) {
-    const meta = await idbGet(STORE_VIDEOS, id);
+    const meta = videoListCache[id] || await idbGet(STORE_VIDEOS, id);
     if (meta && Number.isFinite(meta.duration)) total += meta.duration;
   }
   totalDurationEl.textContent = formatTime(total);
@@ -1166,8 +1178,6 @@ function setMode(m) {
 }
 
 function applyWindowSettingsFromApp() {
-  if (window.electronAPI?.setSettings) {
-  }
   try {
     if (videoPlayer) {
       setPlayerUIState();
@@ -1216,9 +1226,6 @@ async function toggleFullscreen() {
       await document.exitFullscreen();
     }
   } catch {}
-}
-
-async function toggleWindowVisibility() {
 }
 
 function applyPlaybackCommand(command) {
@@ -1584,37 +1591,7 @@ window.addEventListener('beforeunload', () => {
   } catch {}
 });
 
-async function restoreFromRuntimeState() {
-  if (!appSettings.restoreLastState || !startupRuntimeState) return;
-
-  if (startupRuntimeState.lastPlayMode && ['order', 'shuffle', 'random'].includes(startupRuntimeState.lastPlayMode)) {
-    playMode = startupRuntimeState.lastPlayMode;
-    setMode(playMode);
-  }
-
-  if (Number.isFinite(startupRuntimeState.lastSpeed)) {
-    const speed = Math.min(4, Math.max(0.25, startupRuntimeState.lastSpeed));
-    if (speedSelect) speedSelect.value = String(speed);
-    if (videoPlayer) videoPlayer.playbackRate = speed;
-  }
-
-  if (Number.isFinite(startupRuntimeState.lastVolume)) {
-    const vol = Math.min(1, Math.max(0, startupRuntimeState.lastVolume));
-    localStorage.setItem('playerVolume', String(vol));
-    if (videoPlayer) videoPlayer.volume = vol;
-  }
-
-  if (startupRuntimeState.lastPlaylist && currentPlaylist !== startupRuntimeState.lastPlaylist) {
-    const pl = await idbGet(STORE_PLAYLISTS, startupRuntimeState.lastPlaylist);
-    if (pl && Array.isArray(pl.items)) {
-      currentPlaylist = startupRuntimeState.lastPlaylist;
-    }
-  }
-
-  await refreshPlaylistsUI();
-  await refreshTrackList();
-  await updateTotalDuration();
-
+async function restorePlaybackTarget() {
   const pl = await getCurrentPlaylist();
   currentPlaylistSnapshot = pl && Array.isArray(pl.items) ? pl.items.slice() : [];
   if (!pl || pl.items.length === 0) return;
@@ -1631,24 +1608,21 @@ async function restoreFromRuntimeState() {
     targetId = pl.items[0];
   }
 
-  if (targetId) {
-    await loadAndPlayById(targetId, {
-      autoplay: !!startupRuntimeState.isPlaying,
-      seekTime: Number.isFinite(startupRuntimeState.lastTime) ? startupRuntimeState.lastTime : 0
-    });
-    if (!startupRuntimeState.isPlaying) {
-      videoPlayer.pause();
-    }
-    await refreshTrackList();
-    updateSeekUI();
+  if (!targetId) return;
+
+  await loadAndPlayById(targetId, {
+    autoplay: !!startupRuntimeState.isPlaying,
+    seekTime: Number.isFinite(startupRuntimeState.lastTime) ? startupRuntimeState.lastTime : 0
+  });
+  if (!startupRuntimeState.isPlaying) {
+    videoPlayer.pause();
   }
+  await refreshTrackList();
+  updateSeekUI();
 }
 
 async function init() {
   await openDB();
-
-  const vids = await idbGetAll(STORE_VIDEOS);
-  vids.forEach(v => { if (v && v.id) videoListCache[v.id] = v; });
 
   const pls = await loadAllPlaylists();
   if (pls.length === 0) {
@@ -1667,24 +1641,26 @@ async function init() {
 
   createVolumeControls();
 
-  if (startupRuntimeState && appSettings.restoreLastState && Number.isFinite(startupRuntimeState.lastVolume)) {
+  const restoreEnabled = appSettings.restoreLastState && !!startupRuntimeState;
+
+  if (restoreEnabled && Number.isFinite(startupRuntimeState.lastVolume)) {
     const vol = Math.min(1, Math.max(0, startupRuntimeState.lastVolume));
     localStorage.setItem('playerVolume', String(vol));
     videoPlayer.volume = vol;
   }
 
-  if (startupRuntimeState && appSettings.restoreLastState && Number.isFinite(startupRuntimeState.lastSpeed)) {
+  if (restoreEnabled && Number.isFinite(startupRuntimeState.lastSpeed)) {
     const speed = Math.min(4, Math.max(0.25, startupRuntimeState.lastSpeed));
     speedSelect.value = String(speed);
     videoPlayer.playbackRate = speed;
   }
 
-  if (startupRuntimeState && appSettings.restoreLastState && startupRuntimeState.lastPlaylist) {
+  if (restoreEnabled && startupRuntimeState.lastPlaylist) {
     const match = pls.find(p => p?.name === startupRuntimeState.lastPlaylist);
     if (match) currentPlaylist = normalizePlaylistName(match.name) || match.name;
   }
 
-  if (startupRuntimeState && appSettings.restoreLastState && ['order', 'shuffle', 'random'].includes(startupRuntimeState.lastPlayMode)) {
+  if (restoreEnabled && ['order', 'shuffle', 'random'].includes(startupRuntimeState.lastPlayMode)) {
     setMode(startupRuntimeState.lastPlayMode);
   } else {
     setMode('order');
@@ -1696,8 +1672,8 @@ async function init() {
   setPlayerUIState();
   updateSeekUI();
 
-  if (appSettings.restoreLastState && startupRuntimeState?.lastPlaylist) {
-    await restoreFromRuntimeState();
+  if (restoreEnabled && startupRuntimeState.lastPlaylist) {
+    await restorePlaybackTarget();
   }
 }
 
