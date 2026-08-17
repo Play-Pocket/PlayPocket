@@ -66,7 +66,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             val scheme = uri.scheme?.lowercase() ?: return
-            if (scheme == "http" || scheme == "https") {
+            val host = uri.host?.lowercase() ?: return
+            val isOfficialSite = scheme == "https" && host == "playpocket.f5.si" && uri.userInfo == null
+            if (isOfficialSite) {
                 val intent = Intent(Intent.ACTION_VIEW, uri)
                 if (intent.resolveActivity(packageManager) != null) {
                     startActivity(intent)
