@@ -17,7 +17,17 @@ const DEFAULT_SETTINGS = {
   restoreLastState: true,
   trayEnabled: true,
   alwaysOnTop: false,
-  keyboardShortcutsEnabled: true
+  keyboardShortcutsEnabled: true,
+  autoAudioQuality: true,
+  compactUI: false,
+  taskbarControlsEnabled: true,
+  videoDisplayEnabled: true,
+  crossfadeEnabled: false,
+  crossfadeDuration: 3,
+  gaplessEnabled: true,
+  seamlessPlayback: true,
+  volumeNormalization: false,
+  monoAudio: false
 };
 
 function resolveAppDataDir() {
@@ -119,7 +129,17 @@ function loadSettings() {
     restoreLastState: typeof parsed?.restoreLastState === 'boolean' ? parsed.restoreLastState : DEFAULT_SETTINGS.restoreLastState,
     trayEnabled: typeof parsed?.trayEnabled === 'boolean' ? parsed.trayEnabled : DEFAULT_SETTINGS.trayEnabled,
     alwaysOnTop: typeof parsed?.alwaysOnTop === 'boolean' ? parsed.alwaysOnTop : DEFAULT_SETTINGS.alwaysOnTop,
-    keyboardShortcutsEnabled: typeof parsed?.keyboardShortcutsEnabled === 'boolean' ? parsed.keyboardShortcutsEnabled : DEFAULT_SETTINGS.keyboardShortcutsEnabled
+    keyboardShortcutsEnabled: typeof parsed?.keyboardShortcutsEnabled === 'boolean' ? parsed.keyboardShortcutsEnabled : DEFAULT_SETTINGS.keyboardShortcutsEnabled,
+    autoAudioQuality: typeof parsed?.autoAudioQuality === 'boolean' ? parsed.autoAudioQuality : DEFAULT_SETTINGS.autoAudioQuality,
+    compactUI: typeof parsed?.compactUI === 'boolean' ? parsed.compactUI : DEFAULT_SETTINGS.compactUI,
+    taskbarControlsEnabled: typeof parsed?.taskbarControlsEnabled === 'boolean' ? parsed.taskbarControlsEnabled : DEFAULT_SETTINGS.taskbarControlsEnabled,
+    videoDisplayEnabled: typeof parsed?.videoDisplayEnabled === 'boolean' ? parsed.videoDisplayEnabled : DEFAULT_SETTINGS.videoDisplayEnabled,
+    crossfadeEnabled: typeof parsed?.crossfadeEnabled === 'boolean' ? parsed.crossfadeEnabled : DEFAULT_SETTINGS.crossfadeEnabled,
+    crossfadeDuration: Number.isFinite(Number(parsed?.crossfadeDuration)) ? Math.min(10, Math.max(1, Number(parsed.crossfadeDuration))) : DEFAULT_SETTINGS.crossfadeDuration,
+    gaplessEnabled: typeof parsed?.gaplessEnabled === 'boolean' ? parsed.gaplessEnabled : DEFAULT_SETTINGS.gaplessEnabled,
+    seamlessPlayback: typeof parsed?.seamlessPlayback === 'boolean' ? parsed.seamlessPlayback : DEFAULT_SETTINGS.seamlessPlayback,
+    volumeNormalization: typeof parsed?.volumeNormalization === 'boolean' ? parsed.volumeNormalization : DEFAULT_SETTINGS.volumeNormalization,
+    monoAudio: typeof parsed?.monoAudio === 'boolean' ? parsed.monoAudio : DEFAULT_SETTINGS.monoAudio
   };
 }
 
@@ -138,6 +158,16 @@ function sanitizeSettingsInput(partial = {}) {
   if (typeof partial.trayEnabled === 'boolean') out.trayEnabled = partial.trayEnabled;
   if (typeof partial.alwaysOnTop === 'boolean') out.alwaysOnTop = partial.alwaysOnTop;
   if (typeof partial.keyboardShortcutsEnabled === 'boolean') out.keyboardShortcutsEnabled = partial.keyboardShortcutsEnabled;
+  if (typeof partial.autoAudioQuality === 'boolean') out.autoAudioQuality = partial.autoAudioQuality;
+  if (typeof partial.compactUI === 'boolean') out.compactUI = partial.compactUI;
+  if (typeof partial.taskbarControlsEnabled === 'boolean') out.taskbarControlsEnabled = partial.taskbarControlsEnabled;
+  if (typeof partial.videoDisplayEnabled === 'boolean') out.videoDisplayEnabled = partial.videoDisplayEnabled;
+  if (typeof partial.crossfadeEnabled === 'boolean') out.crossfadeEnabled = partial.crossfadeEnabled;
+  if (Number.isFinite(Number(partial.crossfadeDuration))) out.crossfadeDuration = Math.min(10, Math.max(1, Number(partial.crossfadeDuration)));
+  if (typeof partial.gaplessEnabled === 'boolean') out.gaplessEnabled = partial.gaplessEnabled;
+  if (typeof partial.seamlessPlayback === 'boolean') out.seamlessPlayback = partial.seamlessPlayback;
+  if (typeof partial.volumeNormalization === 'boolean') out.volumeNormalization = partial.volumeNormalization;
+  if (typeof partial.monoAudio === 'boolean') out.monoAudio = partial.monoAudio;
 
   return out;
 }
@@ -200,6 +230,61 @@ function resolveAppIcon() {
   else if (fs.existsSync(pngPath)) cachedAppIcon = nativeImage.createFromPath(pngPath);
   else cachedAppIcon = null;
   return cachedAppIcon;
+}
+
+let cachedThumbarIcons;
+
+function resolveThumbarIcons() {
+  if (cachedThumbarIcons !== undefined) return cachedThumbarIcons;
+  const dir = path.join(__dirname, 'app', 'icons');
+  const load = (name) => {
+    const p = path.join(dir, name);
+    return fs.existsSync(p) ? nativeImage.createFromPath(p) : nativeImage.createEmpty();
+  };
+  cachedThumbarIcons = {
+    prev: load('thumb-prev.png'),
+    play: load('thumb-play.png'),
+    pause: load('thumb-pause.png'),
+    next: load('thumb-next.png')
+  };
+  return cachedThumbarIcons;
+}
+
+function updateThumbar(isPlaying) {
+  if (process.platform !== 'win32') return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (typeof mainWindow.setThumbarButtons !== 'function') return;
+
+  lastKnownIsPlaying = isPlaying;
+
+  if (!settings.taskbarControlsEnabled) {
+    try { mainWindow.setThumbarButtons([]); } catch (e) {}
+    return;
+  }
+
+  const icons = resolveThumbarIcons();
+
+  try {
+    mainWindow.setThumbarButtons([
+      {
+        tooltip: '前へ',
+        icon: icons.prev,
+        click: () => sendPlaybackCommand('previous-track')
+      },
+      {
+        tooltip: isPlaying ? '一時停止' : '再生',
+        icon: isPlaying ? icons.pause : icons.play,
+        click: () => sendPlaybackCommand('toggle-play-pause')
+      },
+      {
+        tooltip: '次へ',
+        icon: icons.next,
+        click: () => sendPlaybackCommand('next-track')
+      }
+    ]);
+  } catch (e) {
+    console.warn('タスクバーボタンの更新に失敗しました:', e);
+  }
 }
 
 function shutdownRPC() {
@@ -393,6 +478,7 @@ let rpcRetries = 0;
 let isQuitting = false;
 const MAX_RPC_RETRIES = 10;
 let windowStateSaveTimer = null;
+let lastKnownIsPlaying = false;
 
 if (process.platform === 'win32') {
   try {
@@ -546,6 +632,11 @@ ipcMain.on('set-rpc', (event, data = {}) => {
   }
 });
 
+ipcMain.on('update-playback-state', (event, data = {}) => {
+  if (!isMainWindowSender(event)) return;
+  updateThumbar(!!data?.isPlaying);
+});
+
 ipcMain.on('clear-rpc', (event) => {
   if (!isMainWindowSender(event)) return;
   if (!rpc || !settings.rpcEnabled) return;
@@ -611,6 +702,10 @@ ipcMain.handle('set-settings', async (event, partial = {}) => {
     registerGlobalShortcuts();
   }
 
+  if (prev.taskbarControlsEnabled !== settings.taskbarControlsEnabled) {
+    updateThumbar(lastKnownIsPlaying);
+  }
+
   return settings;
 });
 
@@ -648,6 +743,7 @@ app.whenReady().then(() => {
   createWindow();
   applyTraySetting();
   registerGlobalShortcuts();
+  updateThumbar(false);
 
   setImmediate(() => {
     applyStartupSetting(settings.startupLaunch);
