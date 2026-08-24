@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   setRPC: (data) => ipcRenderer.send('set-rpc', data),
   clearRPC: () => ipcRenderer.send('clear-rpc'),
+  updatePlaybackState: (data) => ipcRenderer.send('update-playback-state', data),
 
   getSettings: () => ipcRenderer.invoke('get-settings'),
   getStartupState: () => ipcRenderer.invoke('get-startup-state'),
