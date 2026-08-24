@@ -22,33 +22,33 @@
   <div id="app">
     <aside class="sidebar" role="complementary" aria-label="サイドバー">
       <div class="sidebar-content">
-        <div class="brand">PlayPocket</div>
+        <div class="brand"><span class="brand-full">PlayPocket</span><span class="brand-mark" aria-hidden="true">PP</span></div>
 
         <div class="playlist-controls">
           <input id="newPlaylistName" placeholder="新しいプレイリスト名" aria-label="新しいプレイリスト名" maxlength="80" />
-          <button id="createPlaylistBtn" class="btn" type="button">作成</button>
+          <button id="createPlaylistBtn" class="btn" type="button" data-icon="＋" title="プレイリストを作成"><span class="btn-label">作成</span></button>
         </div>
 
         <ul id="playlists" class="playlists" aria-label="プレイリスト一覧"></ul>
 
         <div class="file-controls" aria-label="ファイル操作">
           <input id="fileInput" type="file" accept="video/*" multiple />
-          <label for="fileInput" class="btn file-label">ファイルを追加</label>
-          <div id="dropZone" class="drop-zone" aria-hidden="false">ここにドラッグ＆ドロップ</div>
+          <label for="fileInput" class="btn file-label" data-icon="📁" title="ファイルを追加"><span class="btn-label">ファイルを追加</span></label>
+          <div id="dropZone" class="drop-zone" aria-hidden="false" data-icon="⇩"><span class="btn-label">ここにドラッグ＆ドロップ</span></div>
 
           <div class="export-row">
-            <button id="sharePlaylistBtn" class="btn share-button" type="button">プレイリストを共有</button>
-            <button id="exportMetaBtn" class="btn small" type="button">プレイリストをエクスポート</button>
-            <button id="exportWithBlobsBtn" class="btn small" type="button">プレイリストをエクスポート（埋め込み）</button>
+            <button id="sharePlaylistBtn" class="btn share-button" type="button" data-icon="↗" title="プレイリストを共有"><span class="btn-label">プレイリストを共有</span></button>
+            <button id="exportMetaBtn" class="btn small" type="button" data-icon="⬇" title="プレイリストをエクスポート"><span class="btn-label">プレイリストをエクスポート</span></button>
+            <button id="exportWithBlobsBtn" class="btn small" type="button" data-icon="⬇" title="プレイリストをエクスポート（埋め込み）"><span class="btn-label">プレイリストをエクスポート（埋め込み）</span></button>
           </div>
 
           <input id="importFile" type="file" accept=".json" aria-label="プレイリストをインポート" />
-          <label for="importFile" class="btn file-label">プレイリストをインポート</label>
+          <label for="importFile" class="btn file-label" data-icon="⬆" title="プレイリストをインポート"><span class="btn-label">プレイリストをインポート</span></label>
         </div>
       </div>
 
       <div class="sidebar-footer">
-        <button id="openSettingsBtn" class="btn settings-btn" type="button">設定</button>
+        <button id="openSettingsBtn" class="btn settings-btn" type="button" data-icon="⚙" title="設定"><span class="btn-label">設定</span></button>
         <a id="officialSiteLink" class="site-link" href="https://playpocket.f5.si" rel="noreferrer noopener">
           公式サイト：https://playpocket.f5.si
         </a>
@@ -57,7 +57,7 @@
 
     <main class="main" role="main">
       <header class="topbar" role="banner">
-        <div class="search">PlayPocket 1.4.2</div>
+        <div class="search">PlayPocket 1.5.0</div>
         <div class="modes" role="tablist" aria-label="再生モード">
           <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
           <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
@@ -69,7 +69,13 @@
         <div class="player-left">
           <div class="video-shell">
             <div class="video-stage paused" id="videoStage">
-              <video id="videoPlayer" preload="metadata" aria-label="ビデオプレーヤー"></video>
+              <video id="videoPlayer" class="video-el" preload="metadata" aria-label="ビデオプレーヤー"></video>
+              <video id="videoPlayerB" class="video-el is-standby" preload="metadata" muted aria-hidden="true"></video>
+              <div id="audioOnlyCard" class="audio-only-card" aria-hidden="true">
+                <img id="audioOnlyThumb" class="audio-only-thumb" alt="" />
+                <div id="audioOnlyTitle" class="audio-only-title"></div>
+                <div class="audio-only-badge">オーディオのみ再生中</div>
+              </div>
               <button id="centerPlayBtn" class="overlay-play" type="button" aria-label="再生/一時停止">▶</button>
             </div>
 
@@ -86,7 +92,7 @@
             <button id="nextBtn" class="small-btn" aria-label="次のトラック" type="button">▶▶</button>
 
             <label for="speedSelect" class="visually-hidden">再生速度</label>
-            <label class="speed-label">速度
+            <label class="speed-label"><span class="btn-label">速度</span>
               <select id="speedSelect" aria-label="再生速度">
                 <option value="0.5">0.5x</option>
                 <option value="0.75">0.75x</option>
@@ -99,7 +105,7 @@
 
             <button id="fullscreenBtn" class="small-btn" type="button" aria-label="全画面表示">⛶</button>
 
-            <div class="total-duration" aria-live="polite">合計: <span id="totalDuration">00:00:00</span></div>
+            <div class="total-duration" aria-live="polite"><span class="btn-label">合計: </span><span id="totalDuration">00:00:00</span></div>
           </div>
         </div>
 
@@ -157,66 +163,151 @@
         <button id="closeSettingsBtn" class="small-btn settings-close" type="button" aria-label="閉じる">×</button>
       </div>
 
-      <div class="settings-grid">
-        <label class="settings-row">
-          <span>音質</span>
-          <select id="audioPreset">
-            <option value="standard">標準</option>
-            <option value="high">高音質優先</option>
-            <option value="low">軽量</option>
-          </select>
-        </label>
+      <div class="settings-body">
+        <h3 class="settings-section-title">再生</h3>
+        <div class="settings-grid">
+          <label class="settings-row">
+            <span>音質</span>
+            <select id="audioPreset">
+              <option value="standard">標準</option>
+              <option value="high">高音質優先</option>
+              <option value="low">軽量</option>
+            </select>
+          </label>
 
-        <label class="settings-row">
-          <span>Discord RPCを有効にする</span>
-          <input id="rpcEnabled" type="checkbox" />
-        </label>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>音質の自動調節</span>
+              <input id="autoAudioQuality" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">ネットワークの帯域幅が低いときに自動で音質を調整します。オフにすると、環境によっては再生が途切れることがあります。</p>
+          </div>
 
-        <label class="settings-row">
-          <span>パソコン起動時に自動で起動</span>
-          <input id="startupLaunch" type="checkbox" />
-        </label>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>曲をクロスフェードする</span>
+              <input id="crossfadeEnabled" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">曲の終わりと次の曲の始まりを重ねて、なめらかに切り替えます（追加順・シャッフル再生時）。</p>
+            <label class="settings-row-sub" id="crossfadeDurationRow">
+              <span>クロスフェードの長さ：<span id="crossfadeDurationValue">3</span>秒</span>
+              <input id="crossfadeDuration" type="range" min="1" max="10" step="1" value="3" />
+            </label>
+          </div>
 
-        <label class="settings-row">
-          <span>閉じるボタンでウィンドウを最小化</span>
-          <input id="minimizeOnClose" type="checkbox" />
-        </label>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>ギャップレス再生</span>
+              <input id="gaplessEnabled" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">次の曲をあらかじめ読み込み、切り替え時の待ち時間をなくします。</p>
+          </div>
 
-        <label class="settings-row">
-          <span>起動時に前回の状態を復元</span>
-          <input id="restoreLastState" type="checkbox" />
-        </label>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>シームレスな再生</span>
+              <input id="seamlessPlayback" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">曲間の無音をできる限りなくし、途切れのない再生を行います。</p>
+          </div>
 
-        <label class="settings-row">
-          <span>トレイに常駐する</span>
-          <input id="trayEnabled" type="checkbox" />
-        </label>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>音量の均一</span>
+              <input id="volumeNormalization" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">すべての曲を分析し、聞こえる音量差が少なくなるように自動調整します。分析結果は端末内に保存され、次回以降は再分析しません。</p>
+          </div>
 
-        <label class="settings-row">
-          <span>常に最前面に表示</span>
-          <input id="alwaysOnTop" type="checkbox" />
-        </label>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>モノラルオーディオ</span>
+              <input id="monoAudio" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">左右のスピーカーで同じ音声を再生します。</p>
+          </div>
 
-        <label class="settings-row">
-          <span>キーボードショートカットを有効にする</span>
-          <input id="keyboardShortcutsEnabled" type="checkbox" />
-        </label>
+          <label class="settings-row">
+            <span>キーボードショートカットを有効にする</span>
+            <input id="keyboardShortcutsEnabled" type="checkbox" />
+          </label>
+        </div>
 
-        <label class="settings-row">
-          <span>キャッシュを有効にする</span>
-          <input id="cacheEnabled" type="checkbox" />
-        </label>
+        <h3 class="settings-section-title">表示</h3>
+        <div class="settings-grid">
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>ビデオを表示</span>
+              <input id="videoDisplayEnabled" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">オフにすると映像を表示せず、音声のみを再生します。</p>
+          </div>
 
-        <button id="clearCacheBtn" class="btn settings-action" type="button">キャッシュを削除</button>
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>縮小版のUIを使う</span>
+              <input id="compactUI" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">ボタンをアイコン中心の小さな表示にし、画面をより広く使えるようにします。</p>
+          </div>
 
-        <label class="settings-row">
-          <span>ハードウェアアクセラレーション</span>
-          <input id="hardwareAcceleration" type="checkbox" />
-        </label>
+          <label class="settings-row">
+            <span>常に最前面に表示</span>
+            <input id="alwaysOnTop" type="checkbox" />
+          </label>
+        </div>
+
+        <h3 class="settings-section-title">システム</h3>
+        <div class="settings-grid">
+          <label class="settings-row">
+            <span>Discord RPCを有効にする</span>
+            <input id="rpcEnabled" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span>パソコン起動時に自動で起動</span>
+            <input id="startupLaunch" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span>閉じるボタンでウィンドウを最小化</span>
+            <input id="minimizeOnClose" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span>起動時に前回の状態を復元</span>
+            <input id="restoreLastState" type="checkbox" />
+          </label>
+
+          <label class="settings-row">
+            <span>トレイに常駐する</span>
+            <input id="trayEnabled" type="checkbox" />
+          </label>
+
+          <div class="settings-row">
+            <label class="settings-row-main">
+              <span>タスクバーのアイコンで再生を操作</span>
+              <input id="taskbarControlsEnabled" type="checkbox" />
+            </label>
+            <p class="settings-row-desc">再生中にタスクバーのアプリアイコンにマウスを合わせると、前へ・一時停止・次への操作を表示します（最小化中も有効、Windowsのみ）。</p>
+          </div>
+
+          <label class="settings-row">
+            <span>キャッシュを有効にする</span>
+            <input id="cacheEnabled" type="checkbox" />
+          </label>
+
+          <button id="clearCacheBtn" class="btn settings-action" type="button">キャッシュを削除</button>
+
+          <label class="settings-row">
+            <span>ハードウェアアクセラレーション</span>
+            <input id="hardwareAcceleration" type="checkbox" />
+          </label>
+        </div>
       </div>
 
       <p class="settings-note">
-        ハードウェアアクセラレーション、キャッシュ、トレイ設定は必要に応じて再起動後に反映されます。ショートカットは即時切り替えに対応しています。
+        ハードウェアアクセラレーション、キャッシュ、トレイ、タスクバー設定は必要に応じて再起動後に反映されます。ショートカットは即時切り替えに対応しています。
       </p>
     </div>
   </div>
