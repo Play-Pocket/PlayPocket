@@ -1,10 +1,13 @@
 package io.github.takkunlego0916.playpocket
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
@@ -16,10 +19,41 @@ import android.webkit.WebViewClient
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var notificationControlsEnabled = false
+    private var isPlayingState = false
+    private var lastTrackTitle = ""
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    private fun dispatchPlaybackCommand(command: String) {
+        if (!::webView.isInitialized) return
+        val safeCommand = when (command) {
+            "previous-track", "toggle-play-pause", "next-track" -> command
+            else -> return
+        }
+        webView.evaluateJavascript(
+            "window.__ppHandlePlaybackCommand && window.__ppHandlePlaybackCommand('$safeCommand');",
+            null
+        )
+    }
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -47,6 +81,30 @@ class MainActivity : AppCompatActivity() {
         }
 
     inner class JsBridge {
+        @JavascriptInterface
+        fun setNotificationControlsEnabled(enabled: Boolean) {
+            runOnUiThread {
+                notificationControlsEnabled = enabled
+                if (enabled) {
+                    ensureNotificationPermission()
+                    PlaybackNotificationService.updateState(this@MainActivity, isPlayingState, lastTrackTitle)
+                } else {
+                    PlaybackNotificationService.stop(this@MainActivity)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun updatePlaybackState(isPlaying: Boolean, title: String?) {
+            runOnUiThread {
+                isPlayingState = isPlaying
+                lastTrackTitle = title.orEmpty()
+                if (notificationControlsEnabled) {
+                    PlaybackNotificationService.updateState(this@MainActivity, isPlaying, lastTrackTitle)
+                }
+            }
+        }
+
         @JavascriptInterface
         fun clearCache() {
             runOnUiThread {
@@ -135,6 +193,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(JsBridge(), "AndroidBridge")
+
+        PlaybackNotificationService.commandListener = { command ->
+            runOnUiThread { dispatchPlaybackCommand(command) }
+        }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
@@ -229,8 +291,11 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         if (::webView.isInitialized) {
-            webView.onPause()
-            webView.pauseTimers()
+            val keepRunningInBackground = notificationControlsEnabled && isPlayingState
+            if (!keepRunningInBackground) {
+                webView.onPause()
+                webView.pauseTimers()
+            }
         }
     }
 
@@ -243,6 +308,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        PlaybackNotificationService.commandListener = null
+        PlaybackNotificationService.stop(this)
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
         if (::webView.isInitialized) {
