@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">PlayPocket</string>
+    <string name="notification_channel_playback_name">再生コントロール</string>
+    <string name="notification_channel_playback_description">再生中の曲を通知から操作します</string>
+    <string name="notification_action_previous">前へ</string>
+    <string name="notification_action_play">再生</string>
+    <string name="notification_action_pause">一時停止</string>
+    <string name="notification_action_next">次へ</string>
 </resources>
