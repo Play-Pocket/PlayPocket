@@ -64,7 +64,7 @@
 ### Windows
 
 1. 上の **[ダウンロード](https://github.com/Play-Pocket/PlayPocket/releases/latest)** ボタンから最新版をダウンロード
-2. `PlayPocket-Installer-1.4.2-Windows.exe` を実行
+2. `PlayPocket-Installer-1.5.1-Windows.exe` を実行
 3. 画面の案内に従ってインストール
 
 > インストール後は、専用インストーラーからアップデート・修復・アンインストールも簡単に行えます。
@@ -72,7 +72,7 @@
 ### Android
 
 1. 上の **[ダウンロード](https://github.com/Play-Pocket/PlayPocket/releases/latest)** ボタンから最新版をダウンロード
-2. `PlayPocket-Installer-1.4.2-Android.apk` を実行
+2. `PlayPocket-Installer-1.5.1-Android.apk` を実行
 3. 画面の案内に従ってインストール
 
 > 提供元不明のアプリのインストールを許可する必要がある場合があります。
