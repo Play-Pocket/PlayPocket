@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">PlayPocket</string>
+    <string name="notification_channel_playback_name">再生コントロール</string>
+    <string name="notification_channel_playback_description">再生中の曲を通知から操作します</string>
+    <string name="notification_action_previous">前へ</string>
+    <string name="notification_action_play">再生</string>
+    <string name="notification_action_pause">一時停止</string>
+    <string name="notification_action_next">次へ</string>
+    <string name="save_success">ファイルを保存しました</string>
+    <string name="save_failed">ファイルを保存できませんでした。空き容量を確認してください</string>
+    <string name="webview_crash_repeated">表示エンジンが繰り返し停止したため、アプリを終了します。端末を再起動してからもう一度お試しください</string>
+</resources>

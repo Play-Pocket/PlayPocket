@@ -9,27 +9,57 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.provider.DocumentsContract
+import android.util.Base64
+import android.util.Log
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.io.BufferedOutputStream
+import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var container: FrameLayout
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var notificationControlsEnabled = false
     private var isPlayingState = false
     private var lastTrackTitle = ""
+    private var isDebuggableBuild = false
+    private val renderRecoveries = ArrayDeque<Long>()
+
+    private class SaveSession(val id: String, val fileName: String, val mimeType: String) {
+        @Volatile var uri: Uri? = null
+        @Volatile var stream: OutputStream? = null
+    }
+
+    private val saveSessions = ConcurrentHashMap<String, SaveSession>()
+
+    @Volatile
+    private var pendingSaveId: String? = null
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    private fun startUrl(): String {
+        val base = "file:///android_asset/index.html"
+        return if (isDebuggableBuild) "$base?dev=1" else base
+    }
 
     private fun ensureNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -55,6 +85,85 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun isOfficialSite(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        return scheme == "https" && host == "playpocket.f5.si" && uri.userInfo == null && uri.port == -1
+    }
+
+    private fun sanitizeFileName(value: String?): String {
+        val cleaned = value.orEmpty()
+            .replace(Regex("[\\u0000-\\u001F\\u007F<>:\"/\\\\|?*]"), "-")
+            .trim()
+            .trimEnd('.', ' ')
+            .take(120)
+        return if (cleaned.isEmpty()) "playpocket-export.json" else cleaned
+    }
+
+    private fun sanitizeMimeType(value: String?): String {
+        val text = value.orEmpty().trim()
+        return if (Regex("^[A-Za-z0-9.+-]{1,60}/[A-Za-z0-9.+-]{1,60}$").matches(text)) text else "application/octet-stream"
+    }
+
+    private fun notifySaveReady(id: String, ok: Boolean) {
+        runOnUiThread {
+            if (!::webView.isInitialized) return@runOnUiThread
+            webView.evaluateJavascript(
+                "window.__ppOnSaveReady && window.__ppOnSaveReady('$id', $ok);",
+                null
+            )
+        }
+    }
+
+    private fun closeSaveSession(session: SaveSession, deleteFile: Boolean) {
+        saveSessions.remove(session.id)
+        try {
+            session.stream?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "close save stream failed", e)
+        }
+        session.stream = null
+        val uri = session.uri
+        if (deleteFile && uri != null) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, uri)
+            } catch (e: Exception) {
+                Log.w(TAG, "delete partial save failed", e)
+            }
+        }
+    }
+
+    private fun abortAllSaves() {
+        pendingSaveId = null
+        for (session in saveSessions.values.toList()) {
+            closeSaveSession(session, deleteFile = true)
+        }
+    }
+
+    private val createDocumentLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val id = pendingSaveId ?: return@registerForActivityResult
+            pendingSaveId = null
+            val session = saveSessions[id] ?: return@registerForActivityResult
+            val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
+            if (uri == null) {
+                saveSessions.remove(id)
+                notifySaveReady(id, false)
+                return@registerForActivityResult
+            }
+            try {
+                val output = contentResolver.openOutputStream(uri, "w")
+                    ?: throw java.io.IOException("openOutputStream returned null")
+                session.uri = uri
+                session.stream = BufferedOutputStream(output, 64 * 1024)
+                notifySaveReady(id, true)
+            } catch (e: Exception) {
+                Log.w(TAG, "open save target failed", e)
+                closeSaveSession(session, deleteFile = true)
+                notifySaveReady(id, false)
+            }
+        }
+
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val callback = filePathCallback ?: return@registerForActivityResult
@@ -68,13 +177,13 @@ class MainActivity : AppCompatActivity() {
             val data = result.data
             val uris = mutableListOf<Uri>()
 
-            if (data?.clipData != null) {
-                val clip = data.clipData!!
+            val clip = data?.clipData
+            if (clip != null) {
                 for (i in 0 until clip.itemCount) {
-                    uris.add(clip.getItemAt(i).uri)
+                    clip.getItemAt(i)?.uri?.let { uris.add(it) }
                 }
-            } else if (data?.data != null) {
-                uris.add(data.data!!)
+            } else {
+                data?.data?.let { uris.add(it) }
             }
 
             callback.onReceiveValue(if (uris.isEmpty()) null else uris.toTypedArray())
@@ -96,11 +205,12 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun updatePlaybackState(isPlaying: Boolean, title: String?) {
+            val safeTitle = title.orEmpty().replace(Regex("[\\u0000-\\u001F\\u007F]"), "").take(200)
             runOnUiThread {
                 isPlayingState = isPlaying
-                lastTrackTitle = title.orEmpty()
+                lastTrackTitle = safeTitle
                 if (notificationControlsEnabled) {
-                    PlaybackNotificationService.updateState(this@MainActivity, isPlaying, lastTrackTitle)
+                    PlaybackNotificationService.updateState(this@MainActivity, isPlaying, safeTitle)
                 }
             }
         }
@@ -108,14 +218,14 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun clearCache() {
             runOnUiThread {
-                webView.clearCache(true)
+                if (::webView.isInitialized) webView.clearCache(true)
             }
         }
 
         @JavascriptInterface
         fun openExternal(url: String?) {
             val safeUrl = url?.trim().orEmpty()
-            if (safeUrl.isEmpty()) return
+            if (safeUrl.isEmpty() || safeUrl.length > 2048) return
 
             val uri = try {
                 Uri.parse(safeUrl)
@@ -123,14 +233,90 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
-            val scheme = uri.scheme?.lowercase() ?: return
-            val host = uri.host?.lowercase() ?: return
-            val isOfficialSite = scheme == "https" && host == "playpocket.f5.si" && uri.userInfo == null
-            if (isOfficialSite) {
-                val intent = Intent(Intent.ACTION_VIEW, uri)
-                if (intent.resolveActivity(packageManager) != null) {
-                    startActivity(intent)
+            if (isOfficialSite(uri)) {
+                runOnUiThread {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "open external failed", e)
+                    }
                 }
+            }
+        }
+
+        @JavascriptInterface
+        fun beginSave(requestId: String?, fileName: String?, mimeType: String?, totalBytes: Double): Boolean {
+            val id = requestId.orEmpty()
+            if (!Regex("^[A-Za-z0-9_-]{1,64}$").matches(id)) return false
+            if (pendingSaveId != null || saveSessions.isNotEmpty()) return false
+            if (totalBytes.isNaN() || totalBytes < 0) return false
+
+            val session = SaveSession(id, sanitizeFileName(fileName), sanitizeMimeType(mimeType))
+            saveSessions[id] = session
+            pendingSaveId = id
+
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = session.mimeType
+                        putExtra(Intent.EXTRA_TITLE, session.fileName)
+                    }
+                    createDocumentLauncher.launch(intent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "launch save picker failed", e)
+                    pendingSaveId = null
+                    saveSessions.remove(id)
+                    notifySaveReady(id, false)
+                }
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun writeSaveChunk(saveId: String?, base64: String?): Boolean {
+            val session = saveSessions[saveId.orEmpty()] ?: return false
+            val stream = session.stream ?: return false
+            if (base64.isNullOrEmpty()) return true
+            return try {
+                stream.write(Base64.decode(base64, Base64.DEFAULT))
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "write save chunk failed", e)
+                closeSaveSession(session, deleteFile = true)
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun finishSave(saveId: String?): Boolean {
+            val session = saveSessions[saveId.orEmpty()] ?: return false
+            val stream = session.stream ?: return false
+            return try {
+                stream.flush()
+                stream.close()
+                session.stream = null
+                saveSessions.remove(session.id)
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, R.string.save_success, Toast.LENGTH_SHORT).show()
+                }
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "finish save failed", e)
+                closeSaveSession(session, deleteFile = true)
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_LONG).show()
+                }
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun cancelSave(saveId: String?) {
+            val session = saveSessions[saveId.orEmpty()] ?: return
+            closeSaveSession(session, deleteFile = true)
+            runOnUiThread {
+                Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -155,19 +341,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    private fun createWebView(): WebView {
+        val view = WebView(this)
+        view.setBackgroundColor(Color.parseColor("#121212"))
 
-        webView = WebView(this)
-
-        webView.setBackgroundColor(Color.parseColor("#121212"))
-
-        setContentView(webView)
-
-        val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        WebView.setWebContentsDebuggingEnabled(isDebuggable)
-
-        webView.settings.apply {
+        view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
             databaseEnabled = true
@@ -185,6 +363,7 @@ class MainActivity : AppCompatActivity() {
             setSupportZoom(false)
             builtInZoomControls = false
             displayZoomControls = false
+            setGeolocationEnabled(false)
             saveFormData = false
             @Suppress("DEPRECATION")
             savePassword = false
@@ -192,36 +371,41 @@ class MainActivity : AppCompatActivity() {
             userAgentString = userAgentString + " PlayPocketAndroid"
         }
 
-        webView.addJavascriptInterface(JsBridge(), "AndroidBridge")
+        view.addJavascriptInterface(JsBridge(), "AndroidBridge")
 
-        PlaybackNotificationService.commandListener = { command ->
-            runOnUiThread { dispatchPlaybackCommand(command) }
-        }
-
-        webView.webViewClient = object : WebViewClient() {
+        view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest
             ): Boolean {
-                val url = request.url?.toString() ?: return true
+                val uri = request.url ?: return true
+                val url = uri.toString()
 
                 return when {
                     url.startsWith("file://") -> false
                     url.startsWith("blob:") -> false
                     url.startsWith("data:") -> false
-                    url.startsWith("http://") || url.startsWith("https://") -> {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                        if (intent.resolveActivity(packageManager) != null) {
-                            startActivity(intent)
+                    isOfficialSite(uri) -> {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, uri))
+                        } catch (e: Exception) {
+                            Log.w(TAG, "open official site failed", e)
                         }
                         true
                     }
                     else -> true
                 }
             }
+
+            @RequiresApi(Build.VERSION_CODES.O)
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                Log.w(TAG, "WebView render process gone (crashed=${detail.didCrash()})")
+                handleRenderProcessGone(view)
+                return true
+            }
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
+        view.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
                 webView: WebView,
                 filePathCallback: ValueCallback<Array<Uri>>,
@@ -248,15 +432,78 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
 
-                fileChooserLauncher.launch(Intent.createChooser(intent, "ファイルを選択"))
-                return true
+                return try {
+                    fileChooserLauncher.launch(Intent.createChooser(intent, "ファイルを選択"))
+                    true
+                } catch (e: Exception) {
+                    Log.w(TAG, "launch file chooser failed", e)
+                    this@MainActivity.filePathCallback = null
+                    filePathCallback.onReceiveValue(null)
+                    false
+                }
             }
         }
 
-        if (savedInstanceState == null) {
-            webView.loadUrl("file:///android_asset/index.html")
-        } else {
-            webView.restoreState(savedInstanceState)
+        return view
+    }
+
+    private fun handleRenderProcessGone(deadView: WebView) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+
+            val now = SystemClock.elapsedRealtime()
+            while (renderRecoveries.isNotEmpty() && now - renderRecoveries.first() > RENDER_RECOVERY_WINDOW_MS) {
+                renderRecoveries.removeFirst()
+            }
+            renderRecoveries.addLast(now)
+
+            isPlayingState = false
+            PlaybackNotificationService.stop(this)
+            filePathCallback?.onReceiveValue(null)
+            filePathCallback = null
+            abortAllSaves()
+
+            container.removeView(deadView)
+            deadView.destroy()
+
+            if (renderRecoveries.size > MAX_RENDER_RECOVERIES) {
+                Toast.makeText(this, R.string.webview_crash_repeated, Toast.LENGTH_LONG).show()
+                finish()
+                return@runOnUiThread
+            }
+
+            webView = createWebView()
+            container.addView(
+                webView,
+                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+            webView.loadUrl(startUrl())
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        isDebuggableBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        WebView.setWebContentsDebuggingEnabled(isDebuggableBuild)
+
+        container = FrameLayout(this)
+        container.setBackgroundColor(Color.parseColor("#121212"))
+        setContentView(container)
+
+        webView = createWebView()
+        container.addView(
+            webView,
+            ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+
+        PlaybackNotificationService.commandListener = { command ->
+            runOnUiThread { dispatchPlaybackCommand(command) }
+        }
+
+        val restored = savedInstanceState != null && webView.restoreState(savedInstanceState) != null
+        if (!restored) {
+            webView.loadUrl(startUrl())
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -312,10 +559,19 @@ class MainActivity : AppCompatActivity() {
         PlaybackNotificationService.stop(this)
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
+        abortAllSaves()
         if (::webView.isInitialized) {
             webView.stopLoading()
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            webView.removeAllViews()
             webView.destroy()
         }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val TAG = "PlayPocket"
+        private const val MAX_RENDER_RECOVERIES = 3
+        private const val RENDER_RECOVERY_WINDOW_MS = 60_000L
     }
 }

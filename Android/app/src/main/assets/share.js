@@ -14,7 +14,8 @@
     const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
     const binary = atob(padded);
     const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
-    return JSON.parse(new TextDecoder().decode(bytes));
+    const text = new TextDecoder().decode(bytes);
+    return window.PPSchema ? window.PPSchema.safeJsonParse(text) : JSON.parse(text);
   }
 
   function createCode(payload) {
@@ -26,7 +27,7 @@
   function parseCode(value) {
     const text = typeof value === 'string' ? value.trim() : '';
     if (!text.startsWith(PREFIX)) throw new Error('invalid-share-code');
-    if (new Blob([text]).size > MAX_CODE_BYTES) throw new Error('share-code-too-large');
+    if (text.length > MAX_CODE_BYTES || new Blob([text]).size > MAX_CODE_BYTES) throw new Error('share-code-too-large');
     return decode(text.slice(PREFIX.length));
   }
 

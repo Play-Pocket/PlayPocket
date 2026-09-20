@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.util.Log
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -20,8 +21,10 @@ import androidx.media.app.NotificationCompat.MediaStyle
 class PlaybackNotificationService : Service() {
 
     companion object {
+        private const val TAG = "PlayPocketService"
         private const val CHANNEL_ID = "playpocket_playback"
         private const val NOTIFICATION_ID = 4201
+        private const val WAKE_LOCK_TIMEOUT_MS = 6L * 60L * 60L * 1000L
 
         private const val ACTION_PREVIOUS = "io.github.takkunlego0916.playpocket.ACTION_PREVIOUS"
         private const val ACTION_TOGGLE = "io.github.takkunlego0916.playpocket.ACTION_TOGGLE"
@@ -40,14 +43,31 @@ class PlaybackNotificationService : Service() {
                 putExtra(EXTRA_IS_PLAYING, isPlaying)
                 putExtra(EXTRA_TITLE, title)
             }
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "foreground service start was not allowed", e)
+            } catch (e: SecurityException) {
+                Log.w(TAG, "foreground service start was denied", e)
+            }
         }
 
         fun stop(context: Context) {
             val intent = Intent(context, PlaybackNotificationService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "startService(STOP) was not allowed, falling back to stopService", e)
+                try {
+                    context.stopService(Intent(context, PlaybackNotificationService::class.java))
+                } catch (inner: Exception) {
+                    Log.w(TAG, "stopService failed", inner)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "stop failed", e)
+            }
         }
     }
 
@@ -59,15 +79,28 @@ class PlaybackNotificationService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        mediaSession = MediaSessionCompat(this, "PlayPocketPlaybackSession").apply {
+        ensureMediaSession()
+    }
+
+    private fun ensureMediaSession(): MediaSessionCompat {
+        mediaSession?.let { return it }
+        val session = MediaSessionCompat(this, "PlayPocketPlaybackSession").apply {
             setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() { commandListener?.invoke("toggle-play-pause") }
-                override fun onPause() { commandListener?.invoke("toggle-play-pause") }
+                override fun onPlay() {
+                    if (!isPlaying) commandListener?.invoke("toggle-play-pause")
+                }
+
+                override fun onPause() {
+                    if (isPlaying) commandListener?.invoke("toggle-play-pause")
+                }
+
                 override fun onSkipToPrevious() { commandListener?.invoke("previous-track") }
                 override fun onSkipToNext() { commandListener?.invoke("next-track") }
             })
             isActive = true
         }
+        mediaSession = session
+        return session
     }
 
     private fun ensureChannel() {
@@ -98,17 +131,21 @@ class PlaybackNotificationService : Service() {
     }
 
     private fun stopPlaybackForeground() {
-        if (Build.VERSION.SDK_INT >= 24) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
+        try {
+            if (Build.VERSION.SDK_INT >= 24) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "stopForeground failed", e)
         }
         updateWakeLock(false)
     }
 
     private fun publishState() {
-        val session = mediaSession ?: return
+        val session = ensureMediaSession()
 
         val state = PlaybackStateCompat.Builder()
             .setActions(
@@ -132,7 +169,17 @@ class PlaybackNotificationService : Service() {
             .build()
         session.setMetadata(metadata)
 
-        startForeground(NOTIFICATION_ID, buildNotification(session))
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification(session))
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "startForeground was not allowed", e)
+            stopSelf()
+            return
+        } catch (e: SecurityException) {
+            Log.w(TAG, "startForeground was denied", e)
+            stopSelf()
+            return
+        }
         updateWakeLock(isPlaying)
     }
 
@@ -185,16 +232,20 @@ class PlaybackNotificationService : Service() {
     }
 
     private fun updateWakeLock(shouldHold: Boolean) {
-        if (shouldHold) {
-            if (wakeLock == null) {
-                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PlayPocket:PlaybackWakeLock")
+        try {
+            if (shouldHold) {
+                if (wakeLock == null) {
+                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PlayPocket:PlaybackWakeLock").apply {
+                        setReferenceCounted(false)
+                    }
+                }
+                wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
+            } else if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
             }
-            if (wakeLock?.isHeld == false) {
-                wakeLock?.acquire()
-            }
-        } else if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "wake lock update failed", e)
         }
     }
 

@@ -15,8 +15,8 @@ android {
         applicationId = "io.github.takkunlego0916.playpocket"
         minSdk = 23
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.5.0"
+        versionCode = 4
+        versionName = "1.5.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

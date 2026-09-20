@@ -938,3 +938,38 @@ body{ overflow:hidden; -webkit-text-size-adjust:100%; -webkit-tap-highlight-colo
 .compact-ui .settings-row{
   padding:9px 10px;
 }
+.prompt-card{
+  width:min(440px, 100%);
+  gap:14px;
+}
+
+.prompt-field{
+  display:grid;
+  gap:8px;
+  color:var(--text);
+  font-size:14px;
+  font-weight:600;
+}
+
+.prompt-input{
+  width:100%;
+  padding:10px 12px;
+  border:1px solid var(--border, rgba(255,255,255,.14));
+  border-radius:10px;
+  background:#0b0b0b;
+  color:var(--text);
+  font:inherit;
+  font-weight:400;
+  outline:none;
+}
+
+.prompt-input:focus{
+  border-color:rgba(29,185,84,.55);
+  box-shadow:0 0 0 2px rgba(29,185,84,.12);
+}
+
+.prompt-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+}

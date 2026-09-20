@@ -57,7 +57,7 @@
     <main class="main" role="main">
         <header class="topbar" role="banner">
             <button id="menuToggle" class="menu-btn" type="button" aria-label="メニューを開く">☰</button>
-            <div class="search">PlayPocket 1.5.0</div>
+            <div class="search">PlayPocket 1.5.2</div>
             <div class="modes" role="tablist" aria-label="再生モード">
                 <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
                 <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
@@ -70,7 +70,7 @@
                 <div class="video-shell">
                     <div class="video-stage paused" id="videoStage">
                         <video id="videoPlayer" class="video-el" preload="metadata" aria-label="ビデオプレーヤー"></video>
-                        <video id="videoPlayerB" class="video-el is-standby" preload="metadata" muted aria-hidden="true"></video>
+                        <video id="videoPlayerB" class="video-el is-standby" preload="metadata" aria-hidden="true"></video>
                         <div id="audioOnlyCard" class="audio-only-card" aria-hidden="true">
                             <img id="audioOnlyThumb" class="audio-only-thumb" alt="" />
                             <div id="audioOnlyTitle" class="audio-only-title"></div>
@@ -295,8 +295,17 @@
         </p>
     </div>
 </div>
-
-<script src="share.js"></script>
-<script src="app.js"></script>
+  <script src="shared/schema.js"></script>
+  <script src="share.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/media.js"></script>
+  <script src="js/dialogs.js"></script>
+  <script src="js/platform-android.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/library.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
