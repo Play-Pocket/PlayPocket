@@ -1,7 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('installer', {
+  getVersion: () => ipcRenderer.invoke('installer:get-version'),
   getStatus: () => ipcRenderer.invoke('installer:get-status'),
+  getLaunchIntent: () => ipcRenderer.invoke('installer:get-launch-intent'),
   getIconPath: () => ipcRenderer.invoke('installer:get-icon-path'),
   chooseInstallDir: () => ipcRenderer.invoke('installer:choose-install-dir'),
   setInstallDir: (installDir) => ipcRenderer.invoke('installer:set-install-dir', installDir),
@@ -11,6 +13,9 @@ contextBridge.exposeInMainWorld('installer', {
   update: (payload) => ipcRenderer.invoke('installer:update', payload),
   uninstall: (payload) => ipcRenderer.invoke('installer:uninstall', payload),
   onProgress: (callback) => {
-    ipcRenderer.on('installer:progress', (_event, payload) => callback(payload));
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('installer:progress', listener);
+    return () => ipcRenderer.removeListener('installer:progress', listener);
   }
 });

@@ -13,8 +13,14 @@ const updateBtn = document.getElementById('updateBtn');
 const uninstallBtn = document.getElementById('uninstallBtn');
 const browseInstallBtn = document.getElementById('browseInstall');
 const openInstallBtn = document.getElementById('openInstall');
+const versionEl = document.getElementById('installerVersion');
 
 let busy = false;
+
+function messageOf(error) {
+  const raw = error && error.message ? String(error.message) : String(error || '');
+  return raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+}
 
 function setBusy(nextBusy) {
   busy = nextBusy;
@@ -65,12 +71,21 @@ async function setIcon() {
   } catch {}
 }
 
+async function setVersion() {
+  try {
+    const version = await window.installer.getVersion();
+    if (versionEl && typeof version === 'string' && version) {
+      versionEl.textContent = `PlayPocket Installer v${version}`;
+    }
+  } catch {}
+}
+
 async function refresh() {
   try {
     const status = await window.installer.getStatus();
     setStatus(status);
   } catch (error) {
-    statusTextEl.textContent = `取得失敗: ${error.message}`;
+    statusTextEl.textContent = `取得失敗: ${messageOf(error)}`;
   }
 }
 
@@ -123,7 +138,7 @@ async function runAction(action) {
     setProgress({
       percent: 0,
       title: '失敗しました',
-      detail: error.message
+      detail: messageOf(error)
     });
   } finally {
     setBusy(false);
@@ -142,7 +157,7 @@ browseInstallBtn.addEventListener('click', async () => {
     setProgress({
       percent: 0,
       title: '失敗しました',
-      detail: error.message
+      detail: messageOf(error)
     });
   }
 });
@@ -154,7 +169,7 @@ openInstallBtn.addEventListener('click', async () => {
     setProgress({
       percent: 0,
       title: '失敗しました',
-      detail: error.message
+      detail: messageOf(error)
     });
   }
 });
@@ -165,8 +180,16 @@ updateBtn.addEventListener('click', () => runAction('update'));
 uninstallBtn.addEventListener('click', () => runAction('uninstall'));
 
 installDirEl.addEventListener('change', async () => {
-  await window.installer.setInstallDir(installDirEl.value.trim());
-  await refresh();
+  try {
+    await window.installer.setInstallDir(installDirEl.value.trim());
+    await refresh();
+  } catch (error) {
+    setProgress({
+      percent: 0,
+      title: '失敗しました',
+      detail: messageOf(error)
+    });
+  }
 });
 
 window.installer.onProgress((payload) => {
@@ -175,10 +198,18 @@ window.installer.onProgress((payload) => {
 
 (async () => {
   await setIcon();
+  await setVersion();
   await refresh();
   setProgress({
     percent: 0,
     title: '待機中',
     detail: '操作を開始してください'
   });
+
+  try {
+    const intent = await window.installer.getLaunchIntent();
+    if (intent?.autoUninstall) {
+      await runAction('uninstall');
+    }
+  } catch {}
 })();

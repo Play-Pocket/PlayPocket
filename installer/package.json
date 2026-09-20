@@ -1,6 +1,6 @@
 {
   "name": "playpocket-installer",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "description": "PlayPocket installer",
   "main": "main.js",
   "author": "Takkunlego0916",
@@ -8,10 +8,11 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable --publish never"
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "npm test && electron-builder --win portable --publish never"
   },
   "devDependencies": {
-    "electron": "^41.10.3",
+    "electron": "^44.4.3",
     "electron-builder": "^26.15.3"
   },
   "build": {
@@ -24,6 +25,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "lib/**/*",
       "renderer/**/*",
       "package.json"
     ],

@@ -1,30 +1,52 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
 const path = require('path');
-const fs = require('fs');
+const fs = require('original-fs');
 const fsp = fs.promises;
 const os = require('os');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { pathToFileURL } = require('url');
-const { Readable } = require('stream');
-const { Transform } = require('stream');
+const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const crypto = require('crypto');
+const InstallFs = require('./lib/install-fs.js');
+
+const {
+  APP_ID,
+  PRODUCT_NAME,
+  INSTALL_FOLDER_NAME,
+  STAGING_PREFIX,
+  BACKUP_PREFIX,
+  existsDir,
+  ensureDir,
+  readJson,
+  writeJsonAtomic,
+  removeFileSafe,
+  removeDirSafe,
+  extractVersionFromText,
+  compareVersions,
+  findLatestExe,
+  readInstallManifest,
+  writeInstallManifest,
+  assertInstallDirectoryCanBeReplaced,
+  assertManagedInstallDirectory,
+  normalizeInstallDir,
+  isSameOrNested,
+  recoverInterruptedInstall,
+  cleanupStaleWorkDirs
+} = InstallFs;
 
 const execFileAsync = promisify(execFile);
-
-const APP_ID = 'io.github.takkunlego0916.playpocket.installer';
-const PRODUCT_NAME = 'PlayPocket';
-const INSTALL_FOLDER_NAME = 'PlayPocket';
 
 const GITHUB_OWNER = process.env.GITHUB_OWNER || 'Play-Pocket';
 const GITHUB_REPO = process.env.GITHUB_REPO || 'PlayPocketRelease';
 const GITHUB_ASSET_NAME = process.env.GITHUB_ASSET_NAME || '';
-const GITHUB_ASSET_REGEX = process.env.GITHUB_ASSET_REGEX || '^PlayPocket\\.[0-9]+\\.[0-9]+\\.[0-9]+\\.exe$';
+const GITHUB_ASSET_REGEX = process.env.GITHUB_ASSET_REGEX || '^PlayPocket[. ][0-9]+\\.[0-9]+\\.[0-9]+\\.(zip|exe)$';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_API_VERSION = process.env.GITHUB_API_VERSION || '2026-03-10';
-const INSTALL_MANIFEST_FILE = '.playpocket-install.json';
 const MAX_RELEASE_ASSET_BYTES = 2 * 1024 * 1024 * 1024;
+const API_TIMEOUT_MS = 30000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60000;
+const BLOCKED_REQUEST_URLS = ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*', 'ftp://*/*'];
 
 if (process.platform === 'win32') {
   try {
@@ -71,12 +93,54 @@ function getUninstallShortcutPath() {
   return path.join(getStartMenuShortcutDir(), `${PRODUCT_NAME} アンインストール.lnk`);
 }
 
-function getInstallManifestPath(installDir) {
-  return path.join(installDir, INSTALL_MANIFEST_FILE);
+function getPersistedInstallerDir(installDir) {
+  return path.join(path.dirname(installDir), 'PlayPocket-Installer');
+}
+
+function getPersistedInstallerPath(installDir) {
+  return path.join(getPersistedInstallerDir(installDir), path.basename(process.execPath));
+}
+
+async function persistInstallerExecutable(installDir) {
+  if (!app.isPackaged) return process.execPath;
+
+  const persistPath = getPersistedInstallerPath(installDir);
+  if (path.resolve(persistPath) === path.resolve(process.execPath)) {
+    return process.execPath;
+  }
+
+  try {
+    const currentStat = await fsp.stat(process.execPath);
+    let upToDate = false;
+    try {
+      const existingStat = await fsp.stat(persistPath);
+      upToDate = existingStat.size === currentStat.size;
+    } catch {}
+
+    if (!upToDate) {
+      await ensureDir(path.dirname(persistPath));
+      const tempPath = `${persistPath}.tmp-${crypto.randomUUID()}`;
+      await fsp.copyFile(process.execPath, tempPath);
+      await removeFileSafe(persistPath);
+      await fsp.rename(tempPath, persistPath);
+    }
+
+    return persistPath;
+  } catch {
+    return process.execPath;
+  }
+}
+
+function shouldAutoUninstall() {
+  return process.argv.includes('--uninstall');
 }
 
 function isMainWindowSender(event) {
-  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const contents = mainWindow.webContents;
+  if (event.sender !== contents) return false;
+  const frame = event.senderFrame;
+  return Boolean(frame) && frame === contents.mainFrame && typeof frame.url === 'string' && frame.url.startsWith('file:');
 }
 
 function requireMainWindowSender(event) {
@@ -102,64 +166,10 @@ async function getInstallerIconDataUrl() {
   }
 }
 
-function normalizeVersionText(value) {
-  return String(value || '').trim().replace(/^v/i, '');
-}
-
-function extractVersionFromText(value) {
-  const match = String(value || '').match(/([0-9]+(?:\.[0-9]+)+)/);
-  return match ? match[1] : null;
-}
-
-function compareVersions(a, b) {
-  const pa = normalizeVersionText(a).split('.').map((n) => Number.parseInt(n, 10) || 0);
-  const pb = normalizeVersionText(b).split('.').map((n) => Number.parseInt(n, 10) || 0);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const diff = (pb[i] || 0) - (pa[i] || 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
 function sendProgress(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('installer:progress', payload);
   }
-}
-
-function sendStatus(payload) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('installer:status', payload);
-  }
-}
-
-async function existsDir(dir) {
-  try {
-    const st = await fsp.stat(dir);
-    return st.isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-async function ensureDir(dir) {
-  await fsp.mkdir(dir, { recursive: true });
-}
-
-async function readJson(filePath, fallback) {
-  try {
-    const raw = await fsp.readFile(filePath, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-async function writeJson(filePath, value) {
-  await ensureDir(path.dirname(filePath));
-  await fsp.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8');
 }
 
 async function loadState() {
@@ -179,142 +189,8 @@ async function saveState(next = {}) {
     ...state,
     ...next
   };
-  await writeJson(getStatePath(), state);
+  await writeJsonAtomic(getStatePath(), state);
   return state;
-}
-
-function normalizeInstallDir(value, fallback = '') {
-  const candidate = typeof value === 'string' && value.trim() ? value.trim() : fallback;
-  if (!candidate) {
-    throw new Error('インストール先を指定してください');
-  }
-
-  const resolved = path.resolve(candidate);
-  if (resolved === path.parse(resolved).root) {
-    throw new Error('ドライブ直下はインストール先に指定できません');
-  }
-
-  return resolved;
-}
-
-async function getDirectoryEntries(dir) {
-  try {
-    return await fsp.readdir(dir);
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-async function readInstallManifest(installDir) {
-  const manifest = await readJson(getInstallManifestPath(installDir), null);
-  if (!manifest || manifest.appId !== APP_ID || manifest.productName !== PRODUCT_NAME) {
-    return null;
-  }
-  return manifest;
-}
-
-function isLikelyProductExeName(fileName) {
-  const lower = String(fileName || '').toLowerCase();
-  return lower.includes(PRODUCT_NAME.toLowerCase());
-}
-
-async function looksLikeExistingProductInstall(installDir) {
-  const installedExe = await findLatestExe(installDir);
-  return Boolean(installedExe && isLikelyProductExeName(installedExe.name));
-}
-
-async function isDirectoryReplaceable(installDir) {
-  const entries = await getDirectoryEntries(installDir);
-  if (entries === null || entries.length === 0) return true;
-
-  if (await readInstallManifest(installDir)) return true;
-
-  return looksLikeExistingProductInstall(installDir);
-}
-
-async function assertInstallDirectoryCanBeReplaced(installDir) {
-  if (!(await isDirectoryReplaceable(installDir))) {
-    throw new Error('インストール先は空のフォルダ、または PlayPocket が管理しているフォルダを指定してください');
-  }
-}
-
-async function assertManagedInstallDirectory(installDir) {
-  if (!(await existsDir(installDir))) {
-    throw new Error('このフォルダは PlayPocket Installer で管理されていないため削除できません');
-  }
-  if (await readInstallManifest(installDir)) return;
-  if (await looksLikeExistingProductInstall(installDir)) return;
-  throw new Error('このフォルダは PlayPocket Installer で管理されていないため削除できません');
-}
-
-async function writeInstallManifest(installDir, version) {
-  await writeJson(getInstallManifestPath(installDir), {
-    appId: APP_ID,
-    productName: PRODUCT_NAME,
-    version: version || null,
-    installedAt: new Date().toISOString()
-  });
-}
-
-async function walkFiles(dir) {
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
-  const out = [];
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...await walkFiles(full));
-    } else {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-function isExecutableNameAllowed(fileName) {
-  const lower = fileName.toLowerCase();
-  return !lower.includes('uninstall');
-}
-
-async function findLatestExe(dir) {
-  if (!dir) return null;
-  if (!(await existsDir(dir))) return null;
-
-  const files = await walkFiles(dir);
-  const exes = files.filter((f) => f.toLowerCase().endsWith('.exe'));
-  const filtered = exes.filter((f) => isExecutableNameAllowed(path.basename(f)));
-
-  if (!filtered.length) return null;
-
-  const stats = await Promise.all(filtered.map(async (file) => {
-    const st = await fsp.stat(file);
-    return {
-      file,
-      name: path.basename(file),
-      mtimeMs: st.mtimeMs,
-      size: st.size,
-      version: extractVersionFromText(file)
-    };
-  }));
-
-  stats.sort((a, b) => {
-    const aHasVer = a.version ? 1 : 0;
-    const bHasVer = b.version ? 1 : 0;
-    if (aHasVer !== bHasVer) return bHasVer - aHasVer;
-    if (a.version && b.version) {
-      const vCmp = compareVersions(a.version, b.version);
-      if (vCmp !== 0) return vCmp;
-    }
-    if (b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
-    return b.size - a.size;
-  });
-
-  return stats[0];
-}
-
-function isSameOrNested(base, target) {
-  const rel = path.relative(base, target);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 async function createShortcut(shortcutPath, targetPath, workingDir, iconPath, argumentsText = '') {
@@ -331,18 +207,6 @@ async function createShortcut(shortcutPath, targetPath, workingDir, iconPath, ar
   await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
     windowsHide: true
   });
-}
-
-async function removeFileSafe(filePath) {
-  try {
-    await fsp.rm(filePath, { force: true });
-  } catch {}
-}
-
-async function removeDirSafe(dirPath) {
-  try {
-    await fsp.rm(dirPath, { recursive: true, force: true });
-  } catch {}
 }
 
 function getGitHubHeaders() {
@@ -391,11 +255,11 @@ function selectReleaseAsset(assets) {
     } catch {}
   }
 
-  const exeAsset = candidates.find((asset) => asset.name.toLowerCase().endsWith('.exe'));
-  if (exeAsset) return exeAsset;
-
   const zipAsset = candidates.find((asset) => asset.name.toLowerCase().endsWith('.zip'));
   if (zipAsset) return zipAsset;
+
+  const exeAsset = candidates.find((asset) => asset.name.toLowerCase().endsWith('.exe'));
+  if (exeAsset) return exeAsset;
 
   return null;
 }
@@ -409,14 +273,26 @@ function getReleaseVersion(release, asset) {
   );
 }
 
+function isAbortLike(error) {
+  return Boolean(error) && (error.name === 'TimeoutError' || error.name === 'AbortError');
+}
+
 async function fetchLatestRelease() {
   if (!isGitHubConfigured()) {
     throw new Error('GitHub Releases の設定がありません');
   }
 
-  const response = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`, {
-    headers: getGitHubHeaders()
-  });
+  let response;
+  try {
+    response = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`, {
+      headers: getGitHubHeaders(),
+      signal: AbortSignal.timeout(API_TIMEOUT_MS)
+    });
+  } catch (error) {
+    throw new Error(isAbortLike(error)
+      ? 'GitHub に接続できませんでした（タイムアウト）。ネットワーク接続を確認してください'
+      : 'GitHub に接続できませんでした。ネットワーク接続を確認してください');
+  }
 
   if (!response.ok) {
     throw new Error(`GitHub API エラー: ${response.status} ${response.statusText}`);
@@ -453,62 +329,87 @@ function parseSha256Digest(digest) {
 
 async function downloadToFile(url, destPath, expectedSize, expectedDigest, onProgress) {
   assertTrustedReleaseUrl(url);
-  const response = await fetch(url, {
-    headers: {
-      ...getGitHubHeaders(),
-      Accept: 'application/octet-stream'
-    }
-  });
 
-  if (!response.ok) {
-    throw new Error(`ダウンロード失敗: ${response.status} ${response.statusText}`);
-  }
+  const controller = new AbortController();
+  let idleTimer = null;
+  const armIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), DOWNLOAD_IDLE_TIMEOUT_MS);
+  };
+  const timeoutError = () => new Error('ダウンロードがタイムアウトしました。ネットワーク接続を確認してください');
 
-  if (!response.body) {
-    throw new Error('ダウンロードデータを取得できませんでした');
-  }
-
-  assertTrustedReleaseUrl(response.url);
-  const total = Number(response.headers.get('content-length') || 0);
-  if (total > 0 && total !== expectedSize) {
-    throw new Error('ダウンロードサイズがリリース情報と一致しません');
-  }
-
-  let received = 0;
-  const hash = crypto.createHash('sha256');
-  const meter = new Transform({
-    transform(chunk, encoding, callback) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
-      received += buffer.length;
-      hash.update(buffer);
-      if (typeof onProgress === 'function') {
-        onProgress({
-          phase: 'download',
-          percent: expectedSize > 0 ? Math.min(100, Math.round((received / expectedSize) * 100)) : null,
-          loaded: received,
-          total: expectedSize
-        });
-      }
-      callback(null, buffer);
-    }
-  });
-
-  await ensureDir(path.dirname(destPath));
-
+  armIdleTimer();
   try {
-    await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(destPath, { flags: 'wx' }));
-  } catch (error) {
-    await removeFileSafe(destPath);
-    throw error;
-  }
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          ...getGitHubHeaders(),
+          Accept: 'application/octet-stream'
+        },
+        signal: controller.signal
+      });
+    } catch (error) {
+      throw isAbortLike(error) ? timeoutError() : new Error('ダウンロードに失敗しました。ネットワーク接続を確認してください');
+    }
 
-  if (received !== expectedSize) {
-    await removeFileSafe(destPath);
-    throw new Error('ダウンロードサイズがリリース情報と一致しません');
-  }
-  if (hash.digest('hex').toLowerCase() !== expectedDigest) {
-    await removeFileSafe(destPath);
-    throw new Error('ダウンロードしたファイルの SHA-256 検証に失敗しました');
+    if (!response.ok) {
+      throw new Error(`ダウンロード失敗: ${response.status} ${response.statusText}`);
+    }
+
+    if (!response.body) {
+      throw new Error('ダウンロードデータを取得できませんでした');
+    }
+
+    assertTrustedReleaseUrl(response.url);
+    const total = Number(response.headers.get('content-length') || 0);
+    if (total > 0 && total !== expectedSize) {
+      throw new Error('ダウンロードサイズがリリース情報と一致しません');
+    }
+
+    let received = 0;
+    const hash = crypto.createHash('sha256');
+    const meter = new Transform({
+      transform(chunk, encoding, callback) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+        received += buffer.length;
+        if (received > expectedSize) {
+          callback(new Error('ダウンロードサイズがリリース情報と一致しません'));
+          return;
+        }
+        armIdleTimer();
+        hash.update(buffer);
+        if (typeof onProgress === 'function') {
+          onProgress({
+            phase: 'download',
+            percent: expectedSize > 0 ? Math.min(100, Math.round((received / expectedSize) * 100)) : null,
+            loaded: received,
+            total: expectedSize
+          });
+        }
+        callback(null, buffer);
+      }
+    });
+
+    await ensureDir(path.dirname(destPath));
+
+    try {
+      await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(destPath, { flags: 'wx' }));
+    } catch (error) {
+      await removeFileSafe(destPath);
+      throw isAbortLike(error) || controller.signal.aborted ? timeoutError() : error;
+    }
+
+    if (received !== expectedSize) {
+      await removeFileSafe(destPath);
+      throw new Error('ダウンロードサイズがリリース情報と一致しません');
+    }
+    if (hash.digest('hex').toLowerCase() !== expectedDigest) {
+      await removeFileSafe(destPath);
+      throw new Error('ダウンロードしたファイルの SHA-256 検証に失敗しました');
+    }
+  } finally {
+    clearTimeout(idleTimer);
   }
 }
 
@@ -544,44 +445,50 @@ async function prepareGithubSource() {
   await removeDirSafe(workDir);
   await ensureDir(workDir);
 
-  const downloadedPath = path.join(workDir, asset.name);
-  const expectedDigest = parseSha256Digest(asset.digest);
-  sendProgress({
-    phase: 'download',
-    percent: 0,
-    title: 'ダウンロード中...',
-    detail: asset.name
-  });
-
-  await downloadToFile(asset.browser_download_url, downloadedPath, asset.size, expectedDigest, (info) => {
+  try {
+    const downloadedPath = path.join(workDir, asset.name);
+    const expectedDigest = parseSha256Digest(asset.digest);
     sendProgress({
       phase: 'download',
-      percent: info.percent,
+      percent: 0,
       title: 'ダウンロード中...',
       detail: asset.name
     });
-  });
 
-  let sourceDir = workDir;
-  if (asset.name.toLowerCase().endsWith('.zip')) {
-    sendProgress({
-      phase: 'extract',
-      percent: 100,
-      title: '展開中...',
-      detail: asset.name
+    await downloadToFile(asset.browser_download_url, downloadedPath, asset.size, expectedDigest, (info) => {
+      sendProgress({
+        phase: 'download',
+        percent: info.percent,
+        title: 'ダウンロード中...',
+        detail: asset.name
+      });
     });
-    const extractedDir = path.join(workDir, 'extracted');
-    await removeDirSafe(extractedDir);
-    await expandZip(downloadedPath, extractedDir);
-    sourceDir = extractedDir;
-  }
 
-  return {
-    release,
-    asset,
-    version,
-    sourceDir
-  };
+    let sourceDir = workDir;
+    if (asset.name.toLowerCase().endsWith('.zip')) {
+      sendProgress({
+        phase: 'extract',
+        percent: 100,
+        title: '展開中...',
+        detail: asset.name
+      });
+      const extractedDir = path.join(workDir, 'extracted');
+      await removeDirSafe(extractedDir);
+      await expandZip(downloadedPath, extractedDir);
+      sourceDir = extractedDir;
+    }
+
+    return {
+      release,
+      asset,
+      version,
+      workDir,
+      sourceDir
+    };
+  } catch (error) {
+    await removeDirSafe(workDir);
+    throw error;
+  }
 }
 
 async function copyReleaseToInstall(sourceDir, installDir, version) {
@@ -604,11 +511,13 @@ async function copyReleaseToInstall(sourceDir, installDir, version) {
     detail: 'ファイルを配置しています'
   });
 
-  await assertInstallDirectoryCanBeReplaced(installDir);
   const parentDir = path.dirname(resolvedInstall);
+  await recoverInterruptedInstall(resolvedInstall);
+  await assertInstallDirectoryCanBeReplaced(installDir);
+  await cleanupStaleWorkDirs(parentDir);
   const operationId = crypto.randomUUID();
-  const stagingDir = path.join(parentDir, `.${INSTALL_FOLDER_NAME}-staging-${operationId}`);
-  const backupDir = path.join(parentDir, `.${INSTALL_FOLDER_NAME}-backup-${operationId}`);
+  const stagingDir = path.join(parentDir, `${STAGING_PREFIX}${operationId}`);
+  const backupDir = path.join(parentDir, `${BACKUP_PREFIX}${operationId}`);
   const installExists = await existsDir(installDir);
 
   await ensureDir(parentDir);
@@ -639,6 +548,12 @@ async function getInstalledExe(installDir) {
   return findLatestExe(installDir);
 }
 
+async function getInstalledVersion(installDir, installedExe) {
+  const manifest = await readInstallManifest(installDir);
+  if (manifest?.version) return manifest.version;
+  return installedExe?.version || null;
+}
+
 async function syncShortcuts(installDir) {
   const installedExe = await getInstalledExe(installDir);
   if (!installedExe) return;
@@ -654,34 +569,40 @@ async function syncShortcuts(installDir) {
     detail: 'デスクトップとスタートメニューを更新しています'
   });
 
+  const uninstallerExePath = await persistInstallerExecutable(installDir);
+
   await createShortcut(getDesktopShortcutPath(), targetPath, workingDir, iconPath);
   await createShortcut(getStartMenuShortcutPath(), targetPath, workingDir, iconPath);
   await createShortcut(
     getUninstallShortcutPath(),
-    process.execPath,
-    path.dirname(process.execPath),
+    uninstallerExePath,
+    path.dirname(uninstallerExePath),
     getInstallerIconPath(),
     '--uninstall'
   );
 }
 
-async function removeShortcuts() {
+async function removeShortcuts(installDir) {
   await removeFileSafe(getDesktopShortcutPath());
   await removeFileSafe(getStartMenuShortcutPath());
   await removeFileSafe(getUninstallShortcutPath());
   await removeDirSafe(getStartMenuShortcutDir());
+  if (installDir) {
+    await removeDirSafe(getPersistedInstallerDir(installDir));
+  }
 }
 
 async function buildStatus() {
   const installDir = state.installDir || getDefaultInstallDir();
   const installedLatest = await getInstalledExe(installDir);
+  const installedVersion = await getInstalledVersion(installDir, installedLatest);
 
   return {
     installDir,
     installExists: await existsDir(installDir),
     installedExe: installedLatest ? installedLatest.file : null,
     installedName: installedLatest ? installedLatest.name : null,
-    installedVersion: installedLatest ? installedLatest.version : null,
+    installedVersion,
     installedTime: installedLatest ? installedLatest.mtimeMs : null,
     installedSize: installedLatest ? installedLatest.size : null
   };
@@ -697,20 +618,24 @@ async function performInstallLike(action, payload = {}) {
   await saveState({ installDir });
 
   const source = await prepareGithubSource();
-  const latest = await findLatestExe(source.sourceDir);
-  if (!latest) {
-    throw new Error('ダウンロードしたアセット内に exe が見つかりません');
+  try {
+    const latest = await findLatestExe(source.sourceDir);
+    if (!latest) {
+      throw new Error('ダウンロードしたアセット内に exe が見つかりません');
+    }
+
+    sendProgress({
+      phase: 'install',
+      percent: 100,
+      title: 'インストール中...',
+      detail: latest.name
+    });
+
+    await copyReleaseToInstall(source.sourceDir, installDir, source.version);
+    await syncShortcuts(installDir);
+  } finally {
+    await removeDirSafe(source.workDir);
   }
-
-  sendProgress({
-    phase: 'install',
-    percent: 100,
-    title: 'インストール中...',
-    detail: latest.name
-  });
-
-  await copyReleaseToInstall(source.sourceDir, installDir, source.version);
-  await syncShortcuts(installDir);
 
   return {
     action,
@@ -738,21 +663,26 @@ async function performUpdate(payload = {}) {
 
   const sourceVersion = getReleaseVersion(release, asset);
   const installedLatest = await getInstalledExe(installDir);
+  const installedVersion = await getInstalledVersion(installDir, installedLatest);
 
-  if (installedLatest && sourceVersion && installedLatest.version) {
-    if (compareVersions(installedLatest.version, sourceVersion) <= 0) {
+  if (installedLatest && sourceVersion && installedVersion) {
+    if (compareVersions(installedVersion, sourceVersion) <= 0) {
       return { action: 'update', message: 'すでに最新です' };
     }
   }
 
   const source = await prepareGithubSource();
-  const latest = await findLatestExe(source.sourceDir);
-  if (!latest) {
-    throw new Error('ダウンロードしたアセット内に exe が見つかりません');
-  }
+  try {
+    const latest = await findLatestExe(source.sourceDir);
+    if (!latest) {
+      throw new Error('ダウンロードしたアセット内に exe が見つかりません');
+    }
 
-  await copyReleaseToInstall(source.sourceDir, installDir, source.version);
-  await syncShortcuts(installDir);
+    await copyReleaseToInstall(source.sourceDir, installDir, source.version);
+    await syncShortcuts(installDir);
+  } finally {
+    await removeDirSafe(source.workDir);
+  }
 
   return { action: 'update', message: 'アップデートが完了しました' };
 }
@@ -768,7 +698,7 @@ async function performUninstall(payload = {}) {
     detail: 'ショートカットとフォルダを削除しています'
   });
 
-  await removeShortcuts();
+  await removeShortcuts(installDir);
   await removeDirSafe(installDir);
   await saveState({ installDir });
 
@@ -798,13 +728,29 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      spellcheck: false
     }
   });
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  mainWindow.on('close', (event) => {
+    if (!activeAction || !mainWindow) return;
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      buttons: ['続ける', '終了する'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'PlayPocket Installer',
+      message: `${activeAction}の処理中です。`,
+      detail: '今終了すると処理が中断されます。次回の起動時に、可能な範囲で元の状態へ自動的に復旧します。'
+    });
+    if (choice === 0) event.preventDefault();
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -822,9 +768,19 @@ async function runInstallerAction(action, callback) {
   }
 }
 
+ipcMain.handle('installer:get-version', (event) => {
+  requireMainWindowSender(event);
+  return app.getVersion();
+});
+
 ipcMain.handle('installer:get-status', async (event) => {
   requireMainWindowSender(event);
   return buildStatus();
+});
+
+ipcMain.handle('installer:get-launch-intent', (event) => {
+  requireMainWindowSender(event);
+  return { autoUninstall: shouldAutoUninstall() };
 });
 
 ipcMain.handle('installer:get-icon-path', async (event) => {
@@ -870,10 +826,18 @@ ipcMain.handle('installer:open-install-dir', async (event, installDir) => {
   return true;
 });
 
+app.on('web-contents-created', (_event, contents) => {
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.on('will-navigate', (navEvent) => navEvent.preventDefault());
+  contents.on('will-attach-webview', (attachEvent) => attachEvent.preventDefault());
+});
+
 app.whenReady().then(async () => {
   await loadState();
+  await recoverInterruptedInstall(state.installDir);
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.webRequest.onBeforeRequest({ urls: BLOCKED_REQUEST_URLS }, (_details, callback) => callback({ cancel: true }));
   createWindow();
 });
 
