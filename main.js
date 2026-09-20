@@ -2,33 +2,35 @@ const { app, BrowserWindow, Menu, ipcMain, nativeImage, shell, session, Tray, gl
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const RPC = require('discord-rpc');
+const Schema = require('./app/shared/schema.js');
+const CH = require('./main/channels.js');
+const Validators = require('./main/validators.js');
+const { createLogger } = require('./main/logger.js');
+const { createJsonStore } = require('./main/storage.js');
+
+const PLATFORM = Schema.PLATFORM_ELECTRON;
+const IS_DEV = !app.isPackaged;
+const TEST_MODE = IS_DEV && process.env.PLAYPOCKET_TEST_MODE === '1';
+const log = createLogger({ isDev: IS_DEV });
 
 const DISCORD_CLIENT_ID = '1489154338705375242';
 const APP_ID = 'io.github.takkunlego0916.playpocket';
+const MAX_RPC_RETRIES = 10;
+const MAX_RENDERER_RECOVERIES = 3;
+const RENDERER_RECOVERY_WINDOW_MS = 60000;
+const BLOCKED_REQUEST_URLS = ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*', 'ftp://*/*'];
 
-const DEFAULT_SETTINGS = {
-  audioPreset: 'standard',
-  rpcEnabled: true,
-  startupLaunch: false,
-  minimizeOnClose: true,
-  cacheEnabled: true,
-  hardwareAcceleration: true,
-  restoreLastState: true,
-  trayEnabled: true,
-  alwaysOnTop: false,
-  keyboardShortcutsEnabled: true,
-  autoAudioQuality: true,
-  compactUI: false,
-  taskbarControlsEnabled: true,
-  videoDisplayEnabled: true,
-  crossfadeEnabled: false,
-  crossfadeDuration: 3,
-  gaplessEnabled: true,
-  seamlessPlayback: true,
-  volumeNormalization: false,
-  monoAudio: false
-};
+let RPC = null;
+function loadDiscordRPC() {
+  if (RPC !== null) return RPC;
+  try {
+    RPC = require('discord-rpc');
+  } catch (error) {
+    log.warn('rpc', 'discord-rpc の読み込みに失敗しました', error);
+    RPC = false;
+  }
+  return RPC;
+}
 
 function resolveAppDataDir() {
   if (process.platform === 'win32') {
@@ -53,44 +55,47 @@ if (!gotTheLock) {
   process.exit(0);
 }
 
-function safeReadJson(filePath, fallback) {
-  try {
-    if (!fs.existsSync(filePath)) return fallback;
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : fallback;
-  } catch (e) {
-    console.warn(`JSON読み込み失敗: ${filePath}`, e);
-    return fallback;
-  }
+const settingsStore = createJsonStore({
+  filePath: SETTINGS_PATH,
+  backup: true,
+  normalize: (raw) => Schema.normalizeSettings(raw, PLATFORM),
+  sanitizePatch: (patch) => Schema.sanitizeSettingsPatch(patch, PLATFORM),
+  debounceMs: 0,
+  log
+});
+
+const stateStore = createJsonStore({
+  filePath: STATE_PATH,
+  backup: false,
+  normalize: Schema.normalizeRuntimeState,
+  sanitizePatch: Schema.sanitizeRuntimeStateInput,
+  debounceMs: 300,
+  log
+});
+
+let settings = settingsStore.load();
+let runtimeState = stateStore.load();
+let rpc = null;
+let rpcReady = false;
+let rpcRetryTimer = null;
+let rpcPendingActivity = null;
+let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+let windowStateSaveTimer = null;
+let lastKnownIsPlaying = false;
+let cachedAppIcon;
+let cachedThumbarIcons;
+const rendererRecoveries = [];
+
+function updateSettings(patch) {
+  settings = settingsStore.merge(patch, { immediate: true });
+  return settings;
 }
 
-function safeWriteJson(filePath, value) {
-  try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf8');
-    return true;
-  } catch (e) {
-    console.warn(`JSON保存失敗: ${filePath}`, e);
-    return false;
-  }
-}
-
-function sanitizeWindowBounds(bounds) {
-  if (!bounds || typeof bounds !== 'object') return null;
-  const x = Number(bounds.x);
-  const y = Number(bounds.y);
-  const width = Number(bounds.width);
-  const height = Number(bounds.height);
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-  const next = {
-    x: Number.isFinite(x) ? x : undefined,
-    y: Number.isFinite(y) ? y : undefined,
-    width: Math.max(900, Math.round(width)),
-    height: Math.max(600, Math.round(height)),
-    maximized: !!bounds.maximized
-  };
-  return next;
+function mergeRuntimeState(patch, options) {
+  runtimeState = stateStore.merge(patch, options);
+  return runtimeState;
 }
 
 function boundsIntersectAnyDisplay(bounds) {
@@ -103,124 +108,11 @@ function boundsIntersectAnyDisplay(bounds) {
 
   return displays.some((display) => {
     const d = display.bounds;
-    const dx1 = d.x;
-    const dy1 = d.y;
-    const dx2 = d.x + d.width;
-    const dy2 = d.y + d.height;
-    const overlapX = Math.max(0, Math.min(right, dx2) - Math.max(left, dx1));
-    const overlapY = Math.max(0, Math.min(bottom, dy2) - Math.max(top, dy1));
+    const overlapX = Math.max(0, Math.min(right, d.x + d.width) - Math.max(left, d.x));
+    const overlapY = Math.max(0, Math.min(bottom, d.y + d.height) - Math.max(top, d.y));
     return overlapX > 40 && overlapY > 40;
   });
 }
-
-function loadSettings() {
-  const raw = safeReadJson(SETTINGS_PATH, {});
-  const parsed = raw && typeof raw === 'object' ? raw : {};
-
-  return {
-    ...DEFAULT_SETTINGS,
-    ...parsed,
-    audioPreset: ['standard', 'high', 'low'].includes(parsed?.audioPreset) ? parsed.audioPreset : DEFAULT_SETTINGS.audioPreset,
-    rpcEnabled: typeof parsed?.rpcEnabled === 'boolean' ? parsed.rpcEnabled : DEFAULT_SETTINGS.rpcEnabled,
-    startupLaunch: typeof parsed?.startupLaunch === 'boolean' ? parsed.startupLaunch : DEFAULT_SETTINGS.startupLaunch,
-    minimizeOnClose: typeof parsed?.minimizeOnClose === 'boolean' ? parsed.minimizeOnClose : DEFAULT_SETTINGS.minimizeOnClose,
-    cacheEnabled: typeof parsed?.cacheEnabled === 'boolean' ? parsed.cacheEnabled : DEFAULT_SETTINGS.cacheEnabled,
-    hardwareAcceleration: typeof parsed?.hardwareAcceleration === 'boolean' ? parsed.hardwareAcceleration : DEFAULT_SETTINGS.hardwareAcceleration,
-    restoreLastState: typeof parsed?.restoreLastState === 'boolean' ? parsed.restoreLastState : DEFAULT_SETTINGS.restoreLastState,
-    trayEnabled: typeof parsed?.trayEnabled === 'boolean' ? parsed.trayEnabled : DEFAULT_SETTINGS.trayEnabled,
-    alwaysOnTop: typeof parsed?.alwaysOnTop === 'boolean' ? parsed.alwaysOnTop : DEFAULT_SETTINGS.alwaysOnTop,
-    keyboardShortcutsEnabled: typeof parsed?.keyboardShortcutsEnabled === 'boolean' ? parsed.keyboardShortcutsEnabled : DEFAULT_SETTINGS.keyboardShortcutsEnabled,
-    autoAudioQuality: typeof parsed?.autoAudioQuality === 'boolean' ? parsed.autoAudioQuality : DEFAULT_SETTINGS.autoAudioQuality,
-    compactUI: typeof parsed?.compactUI === 'boolean' ? parsed.compactUI : DEFAULT_SETTINGS.compactUI,
-    taskbarControlsEnabled: typeof parsed?.taskbarControlsEnabled === 'boolean' ? parsed.taskbarControlsEnabled : DEFAULT_SETTINGS.taskbarControlsEnabled,
-    videoDisplayEnabled: typeof parsed?.videoDisplayEnabled === 'boolean' ? parsed.videoDisplayEnabled : DEFAULT_SETTINGS.videoDisplayEnabled,
-    crossfadeEnabled: typeof parsed?.crossfadeEnabled === 'boolean' ? parsed.crossfadeEnabled : DEFAULT_SETTINGS.crossfadeEnabled,
-    crossfadeDuration: Number.isFinite(Number(parsed?.crossfadeDuration)) ? Math.min(10, Math.max(1, Number(parsed.crossfadeDuration))) : DEFAULT_SETTINGS.crossfadeDuration,
-    gaplessEnabled: typeof parsed?.gaplessEnabled === 'boolean' ? parsed.gaplessEnabled : DEFAULT_SETTINGS.gaplessEnabled,
-    seamlessPlayback: typeof parsed?.seamlessPlayback === 'boolean' ? parsed.seamlessPlayback : DEFAULT_SETTINGS.seamlessPlayback,
-    volumeNormalization: typeof parsed?.volumeNormalization === 'boolean' ? parsed.volumeNormalization : DEFAULT_SETTINGS.volumeNormalization,
-    monoAudio: typeof parsed?.monoAudio === 'boolean' ? parsed.monoAudio : DEFAULT_SETTINGS.monoAudio
-  };
-}
-
-function sanitizeSettingsInput(partial = {}) {
-  const out = {};
-
-  if (typeof partial.audioPreset === 'string' && ['standard', 'high', 'low'].includes(partial.audioPreset)) {
-    out.audioPreset = partial.audioPreset;
-  }
-  if (typeof partial.rpcEnabled === 'boolean') out.rpcEnabled = partial.rpcEnabled;
-  if (typeof partial.startupLaunch === 'boolean') out.startupLaunch = partial.startupLaunch;
-  if (typeof partial.minimizeOnClose === 'boolean') out.minimizeOnClose = partial.minimizeOnClose;
-  if (typeof partial.cacheEnabled === 'boolean') out.cacheEnabled = partial.cacheEnabled;
-  if (typeof partial.hardwareAcceleration === 'boolean') out.hardwareAcceleration = partial.hardwareAcceleration;
-  if (typeof partial.restoreLastState === 'boolean') out.restoreLastState = partial.restoreLastState;
-  if (typeof partial.trayEnabled === 'boolean') out.trayEnabled = partial.trayEnabled;
-  if (typeof partial.alwaysOnTop === 'boolean') out.alwaysOnTop = partial.alwaysOnTop;
-  if (typeof partial.keyboardShortcutsEnabled === 'boolean') out.keyboardShortcutsEnabled = partial.keyboardShortcutsEnabled;
-  if (typeof partial.autoAudioQuality === 'boolean') out.autoAudioQuality = partial.autoAudioQuality;
-  if (typeof partial.compactUI === 'boolean') out.compactUI = partial.compactUI;
-  if (typeof partial.taskbarControlsEnabled === 'boolean') out.taskbarControlsEnabled = partial.taskbarControlsEnabled;
-  if (typeof partial.videoDisplayEnabled === 'boolean') out.videoDisplayEnabled = partial.videoDisplayEnabled;
-  if (typeof partial.crossfadeEnabled === 'boolean') out.crossfadeEnabled = partial.crossfadeEnabled;
-  if (Number.isFinite(Number(partial.crossfadeDuration))) out.crossfadeDuration = Math.min(10, Math.max(1, Number(partial.crossfadeDuration)));
-  if (typeof partial.gaplessEnabled === 'boolean') out.gaplessEnabled = partial.gaplessEnabled;
-  if (typeof partial.seamlessPlayback === 'boolean') out.seamlessPlayback = partial.seamlessPlayback;
-  if (typeof partial.volumeNormalization === 'boolean') out.volumeNormalization = partial.volumeNormalization;
-  if (typeof partial.monoAudio === 'boolean') out.monoAudio = partial.monoAudio;
-
-  return out;
-}
-
-function loadRuntimeState() {
-  const raw = safeReadJson(STATE_PATH, {});
-  const parsed = raw && typeof raw === 'object' ? raw : {};
-
-  const windowBounds = sanitizeWindowBounds(parsed.windowBounds);
-  const lastVolume = Number(parsed.lastVolume);
-  const lastSpeed = Number(parsed.lastSpeed);
-  const lastCurrentIndex = Number(parsed.lastCurrentIndex);
-
-  return {
-    windowBounds,
-    lastPlaylist: typeof parsed.lastPlaylist === 'string' ? parsed.lastPlaylist : null,
-    lastCurrentIndex: Number.isFinite(lastCurrentIndex) ? Math.max(0, Math.floor(lastCurrentIndex)) : 0,
-    lastPlayMode: ['order', 'shuffle', 'random'].includes(parsed?.lastPlayMode) ? parsed.lastPlayMode : 'order',
-    lastVolume: Number.isFinite(lastVolume) ? Math.min(1, Math.max(0, lastVolume)) : 1,
-    lastSpeed: Number.isFinite(lastSpeed) && lastSpeed > 0 ? Math.min(4, Math.max(0.25, lastSpeed)) : 1,
-    lastTrackId: typeof parsed.lastTrackId === 'string' ? parsed.lastTrackId : null,
-    lastTime: Number.isFinite(Number(parsed.lastTime)) ? Math.max(0, Number(parsed.lastTime)) : 0,
-    isPlaying: typeof parsed.isPlaying === 'boolean' ? parsed.isPlaying : false
-  };
-}
-
-function sanitizeRuntimeStateInput(partial = {}) {
-  const out = {};
-  if (partial.windowBounds) {
-    const bounds = sanitizeWindowBounds(partial.windowBounds);
-    if (bounds) out.windowBounds = bounds;
-  }
-  if (typeof partial.lastPlaylist === 'string') out.lastPlaylist = partial.lastPlaylist;
-  if (Number.isFinite(Number(partial.lastCurrentIndex))) out.lastCurrentIndex = Math.max(0, Math.floor(Number(partial.lastCurrentIndex)));
-  if (['order', 'shuffle', 'random'].includes(partial.lastPlayMode)) out.lastPlayMode = partial.lastPlayMode;
-  if (Number.isFinite(Number(partial.lastVolume))) out.lastVolume = Math.min(1, Math.max(0, Number(partial.lastVolume)));
-  if (Number.isFinite(Number(partial.lastSpeed)) && Number(partial.lastSpeed) > 0) out.lastSpeed = Math.min(4, Math.max(0.25, Number(partial.lastSpeed)));
-  if (typeof partial.lastTrackId === 'string') out.lastTrackId = partial.lastTrackId;
-  if (Number.isFinite(Number(partial.lastTime))) out.lastTime = Math.max(0, Number(partial.lastTime));
-  if (typeof partial.isPlaying === 'boolean') out.isPlaying = partial.isPlaying;
-  return out;
-}
-
-function mergeRuntimeState(partial = {}) {
-  runtimeState = {
-    ...runtimeState,
-    ...sanitizeRuntimeStateInput(partial)
-  };
-  safeWriteJson(STATE_PATH, runtimeState);
-  return runtimeState;
-}
-
-let cachedAppIcon;
 
 function resolveAppIcon() {
   if (cachedAppIcon !== undefined) return cachedAppIcon;
@@ -231,8 +123,6 @@ function resolveAppIcon() {
   else cachedAppIcon = null;
   return cachedAppIcon;
 }
-
-let cachedThumbarIcons;
 
 function resolveThumbarIcons() {
   if (cachedThumbarIcons !== undefined) return cachedThumbarIcons;
@@ -250,6 +140,11 @@ function resolveThumbarIcons() {
   return cachedThumbarIcons;
 }
 
+function sendPlaybackCommand(command) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(CH.PLAYBACK_COMMAND, command);
+}
+
 function updateThumbar(isPlaying) {
   if (process.platform !== 'win32') return;
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -258,7 +153,7 @@ function updateThumbar(isPlaying) {
   lastKnownIsPlaying = isPlaying;
 
   if (!settings.taskbarControlsEnabled) {
-    try { mainWindow.setThumbarButtons([]); } catch (e) {}
+    try { mainWindow.setThumbarButtons([]); } catch {}
     return;
   }
 
@@ -266,67 +161,110 @@ function updateThumbar(isPlaying) {
 
   try {
     mainWindow.setThumbarButtons([
-      {
-        tooltip: '前へ',
-        icon: icons.prev,
-        click: () => sendPlaybackCommand('previous-track')
-      },
+      { tooltip: '前へ', icon: icons.prev, click: () => sendPlaybackCommand('previous-track') },
       {
         tooltip: isPlaying ? '一時停止' : '再生',
         icon: isPlaying ? icons.pause : icons.play,
         click: () => sendPlaybackCommand('toggle-play-pause')
       },
-      {
-        tooltip: '次へ',
-        icon: icons.next,
-        click: () => sendPlaybackCommand('next-track')
-      }
+      { tooltip: '次へ', icon: icons.next, click: () => sendPlaybackCommand('next-track') }
     ]);
-  } catch (e) {
-    console.warn('タスクバーボタンの更新に失敗しました:', e);
+  } catch (error) {
+    log.warn('thumbar', 'タスクバーボタンの更新に失敗しました', error);
   }
 }
 
-function shutdownRPC() {
-  if (!rpc) return;
-  try { rpc.clearActivity(); } catch (e) {}
-  try { rpc.destroy(); } catch (e) {}
-  rpc = null;
-  rpcRetries = 0;
+function flushRpcActivity() {
+  if (!rpc || !rpcReady || !rpcPendingActivity) return;
+  const payload = rpcPendingActivity;
+  try {
+    if (payload.paused) {
+      Promise.resolve(rpc.clearActivity()).catch((error) => log.warn('rpc', error));
+      return;
+    }
+    Promise.resolve(rpc.setActivity({
+      details: payload.title,
+      state: payload.playlist,
+      startTimestamp: payload.startTimestamp,
+      endTimestamp: payload.endTimestamp,
+      largeImageKey: 'app',
+      largeImageText: 'PlayPocket',
+      instance: false
+    })).catch((error) => log.warn('rpc', error));
+  } catch (error) {
+    log.warn('rpc', error);
+  }
 }
 
-function initRPC() {
-  if (!settings.rpcEnabled) return;
-  if (rpc) return;
+function clearRpcRetryTimer() {
+  if (rpcRetryTimer) {
+    clearTimeout(rpcRetryTimer);
+    rpcRetryTimer = null;
+  }
+}
 
-  rpcRetries = 0;
-  rpc = new RPC.Client({ transport: 'ipc' });
+function shutdownRPC({ keepPending = false } = {}) {
+  clearRpcRetryTimer();
+  const current = rpc;
+  rpc = null;
+  rpcReady = false;
+  if (!keepPending) rpcPendingActivity = null;
+  if (!current) return;
+  try { Promise.resolve(current.clearActivity()).catch(() => {}); } catch {}
+  try { Promise.resolve(current.destroy()).catch(() => {}); } catch {}
+}
 
-  const capturedRpc = rpc;
+function scheduleRpcRetry(attempt) {
+  if (isQuitting || !settings.rpcEnabled) return;
+  if (attempt >= MAX_RPC_RETRIES) {
+    log.warn('rpc', 'RPC 再接続の上限に達しました。Discord が起動しているか確認してください。');
+    return;
+  }
+  clearRpcRetryTimer();
+  const delay = Math.min(30000, 5000 * (attempt + 1));
+  rpcRetryTimer = setTimeout(() => {
+    rpcRetryTimer = null;
+    if (isQuitting || !settings.rpcEnabled || rpc) return;
+    initRPC(attempt + 1);
+  }, delay);
+  if (typeof rpcRetryTimer.unref === 'function') rpcRetryTimer.unref();
+}
 
-  rpc.on('ready', () => {
-    rpcRetries = 0;
-    console.log('Discord RPC Ready');
+function initRPC(attempt = 0) {
+  if (!settings.rpcEnabled || rpc) return;
+
+  const RPCLib = loadDiscordRPC();
+  if (!RPCLib) return;
+
+  const client = new RPCLib.Client({ transport: 'ipc' });
+  rpc = client;
+  rpcReady = false;
+
+  let wasReady = false;
+
+  client.on('ready', () => {
+    if (rpc !== client) return;
+    wasReady = true;
+    rpcReady = true;
+    log.debug('rpc', 'Discord RPC Ready');
+    flushRpcActivity();
   });
 
-  rpc.on('disconnected', () => {
-    console.log('RPC disconnected');
-    if (!settings.rpcEnabled || isQuitting) return;
+  client.on('error', (error) => log.warn('rpc', error));
 
-    if (rpcRetries < MAX_RPC_RETRIES) {
-      rpcRetries++;
-      console.log(`RPC 再接続試行 ${rpcRetries}/${MAX_RPC_RETRIES}`);
-      setTimeout(() => {
-        if (!settings.rpcEnabled || isQuitting) return;
-        if (rpc !== capturedRpc) return;
-        capturedRpc.login({ clientId: DISCORD_CLIENT_ID }).catch(console.error);
-      }, 5000);
-    } else {
-      console.warn('RPC 再接続の上限に達しました。Discord が起動しているか確認してください。');
-    }
+  client.on('disconnected', () => {
+    if (rpc !== client) return;
+    log.debug('rpc', 'RPC disconnected');
+    shutdownRPC({ keepPending: true });
+    scheduleRpcRetry(wasReady ? 0 : attempt);
   });
 
-  rpc.login({ clientId: DISCORD_CLIENT_ID }).catch(console.error);
+  client.login({ clientId: DISCORD_CLIENT_ID }).catch((error) => {
+    if (rpc !== client) return;
+    log.debug('rpc', error);
+    shutdownRPC({ keepPending: true });
+    scheduleRpcRetry(attempt);
+  });
 }
 
 function ensureRPCState() {
@@ -334,11 +272,15 @@ function ensureRPCState() {
   else shutdownRPC();
 }
 
+function isWindowVisible() {
+  return Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
+}
+
 function updateTrayMenu() {
   if (!tray) return;
 
   const template = [
-    { label: mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() ? 'ウィンドウを隠す' : 'ウィンドウを表示', click: () => toggleMainWindow() },
+    { label: isWindowVisible() ? 'ウィンドウを隠す' : 'ウィンドウを表示', click: () => toggleMainWindow() },
     { type: 'separator' },
     { label: '再生 / 一時停止', click: () => sendPlaybackCommand('toggle-play-pause') },
     { label: '前へ', click: () => sendPlaybackCommand('previous-track') },
@@ -365,7 +307,7 @@ function createTray() {
 
 function destroyTray() {
   if (!tray) return;
-  try { tray.destroy(); } catch (e) {}
+  try { tray.destroy(); } catch {}
   tray = null;
 }
 
@@ -373,11 +315,6 @@ function applyTraySetting() {
   if (settings.trayEnabled) createTray();
   else destroyTray();
   updateTrayMenu();
-}
-
-function sendPlaybackCommand(command) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('playback-command', command);
 }
 
 function showMainWindow() {
@@ -396,121 +333,84 @@ function hideMainWindow() {
 
 function toggleMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isVisible()) {
-    hideMainWindow();
-  } else {
-    showMainWindow();
-  }
-}
-
-function quitApp() {
-  isQuitting = true;
-  if (windowStateSaveTimer) {
-    clearTimeout(windowStateSaveTimer);
-    windowStateSaveTimer = null;
-  }
-  shutdownRPC();
-  destroyTray();
-  globalShortcut.unregisterAll();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try {
-      mergeRuntimeState({ windowBounds: captureWindowBounds() });
-    } catch (e) {}
-  }
-  app.quit();
-}
-
-function applyStartupSetting(enabled) {
-  try {
-    if (process.platform === 'win32' || process.platform === 'darwin') {
-      app.setLoginItemSettings({
-        openAtLogin: !!enabled
-      });
-    }
-  } catch (e) {
-    console.warn('起動時自動起動設定失敗:', e);
-  }
+  if (mainWindow.isVisible()) hideMainWindow();
+  else showMainWindow();
 }
 
 function captureWindowBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return runtimeState.windowBounds || null;
   const maximized = mainWindow.isMaximized();
   const bounds = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
-  return sanitizeWindowBounds({
-    ...bounds,
-    maximized
-  });
+  return Schema.sanitizeWindowBounds({ ...bounds, maximized });
+}
+
+function persistWindowBounds(options) {
+  const bounds = captureWindowBounds();
+  if (bounds) mergeRuntimeState({ windowBounds: bounds }, options);
+}
+
+function clearWindowStateTimer() {
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer);
+    windowStateSaveTimer = null;
+  }
+}
+
+function queueWindowStateSave() {
+  if (!settings.restoreLastState) return;
+  clearWindowStateTimer();
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = null;
+    persistWindowBounds();
+  }, 300);
+}
+
+function flushAllStores() {
+  clearWindowStateTimer();
+  try { persistWindowBounds(); } catch {}
+  stateStore.flushSync();
+  settingsStore.flushSync();
+}
+
+function quitApp() {
+  isQuitting = true;
+  shutdownRPC();
+  destroyTray();
+  globalShortcut.unregisterAll();
+  flushAllStores();
+  app.quit();
+}
+
+function applyStartupSetting(enabled) {
+  if (!app.isPackaged) return;
+  try {
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      app.setLoginItemSettings({ openAtLogin: !!enabled });
+    }
+  } catch (error) {
+    log.warn('startup', '起動時自動起動設定に失敗しました', error);
+  }
 }
 
 function isMainWindowSender(event) {
-  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const contents = mainWindow.webContents;
+  if (event.sender !== contents) return false;
+  const frame = event.senderFrame;
+  if (!frame || frame !== contents.mainFrame) return false;
+  return typeof frame.url === 'string' && frame.url.startsWith('file:');
 }
 
 function requireMainWindowSender(event) {
-  if (!isMainWindowSender(event)) {
-    throw new Error('Unauthorized IPC sender');
-  }
-}
-
-function isOfficialSiteUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'playpocket.f5.si' && !url.username && !url.password;
-  } catch {
-    return false;
-  }
+  if (!isMainWindowSender(event)) throw new Error('Unauthorized IPC sender');
 }
 
 function isAllowedPermissionRequest(webContents, permission) {
   return permission === 'clipboard-sanitized-write' &&
-    mainWindow &&
+    Boolean(mainWindow) &&
     !mainWindow.isDestroyed() &&
     webContents === mainWindow.webContents &&
     webContents.getURL().startsWith('file:');
-}
-
-let settings = loadSettings();
-let runtimeState = loadRuntimeState();
-let rpc = null;
-let mainWindow = null;
-let tray = null;
-let rpcRetries = 0;
-let isQuitting = false;
-const MAX_RPC_RETRIES = 10;
-let windowStateSaveTimer = null;
-let lastKnownIsPlaying = false;
-
-if (process.platform === 'win32') {
-  try {
-    app.setAppUserModelId(APP_ID);
-  } catch (e) {}
-}
-
-if (!settings.hardwareAcceleration) {
-  app.disableHardwareAcceleration();
-}
-
-if (!settings.cacheEnabled) {
-  app.commandLine.appendSwitch('disable-http-cache');
-} else {
-  try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    app.commandLine.appendSwitch('disk-cache-dir', CACHE_DIR);
-  } catch (e) {
-    console.warn('キャッシュディレクトリ設定失敗:', e);
-  }
-}
-
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
-Menu.setApplicationMenu(null);
-
-function queueWindowStateSave() {
-  if (!settings.restoreLastState) return;
-  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
-  windowStateSaveTimer = setTimeout(() => {
-    windowStateSaveTimer = null;
-    mergeRuntimeState({ windowBounds: captureWindowBounds() });
-  }, 300);
 }
 
 function registerGlobalShortcuts() {
@@ -528,10 +428,20 @@ function registerGlobalShortcuts() {
   for (const [accelerator, action] of shortcuts) {
     try {
       globalShortcut.register(accelerator, action);
-    } catch (e) {
-      console.warn(`ショートカット登録失敗: ${accelerator}`, e);
+    } catch (error) {
+      log.warn('shortcut', `ショートカット登録失敗: ${accelerator}`, error);
     }
   }
+}
+
+function shouldRecoverRenderer() {
+  const now = Date.now();
+  while (rendererRecoveries.length && now - rendererRecoveries[0] > RENDERER_RECOVERY_WINDOW_MS) {
+    rendererRecoveries.shift();
+  }
+  if (rendererRecoveries.length >= MAX_RENDERER_RECOVERIES) return false;
+  rendererRecoveries.push(now);
+  return true;
 }
 
 function createWindow() {
@@ -555,7 +465,9 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
-      webviewTag: false
+      webviewTag: false,
+      spellcheck: false,
+      backgroundThrottling: false
     }
   };
 
@@ -564,168 +476,167 @@ function createWindow() {
     windowOptions.y = savedBounds.y;
   }
 
-  mainWindow = new BrowserWindow(windowOptions);
+  const win = new BrowserWindow(windowOptions);
+  mainWindow = win;
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
-
-  mainWindow.on('close', (e) => {
+  win.on('close', (event) => {
     if (isQuitting) return;
 
     if (settings.trayEnabled) {
-      e.preventDefault();
+      event.preventDefault();
       hideMainWindow();
     } else if (settings.minimizeOnClose) {
-      e.preventDefault();
-      try { mainWindow.minimize(); } catch (err) {}
+      event.preventDefault();
+      try { win.minimize(); } catch {}
     }
   });
 
-  mainWindow.on('move', queueWindowStateSave);
-  mainWindow.on('resize', queueWindowStateSave);
-  mainWindow.on('maximize', queueWindowStateSave);
-  mainWindow.on('unmaximize', queueWindowStateSave);
+  win.on('move', queueWindowStateSave);
+  win.on('resize', queueWindowStateSave);
+  win.on('maximize', queueWindowStateSave);
+  win.on('unmaximize', queueWindowStateSave);
+
+  win.webContents.on('render-process-gone', (_event, details) => {
+    log.error('renderer', `render-process-gone: ${details.reason}`);
+    if (isQuitting || details.reason === 'clean-exit') return;
+    if (!shouldRecoverRenderer()) return;
+    setTimeout(() => {
+      if (!win.isDestroyed()) win.webContents.reload();
+    }, 500);
+  });
 
   const indexPath = path.resolve(__dirname, 'app', 'index.html');
-  mainWindow.loadFile(indexPath);
-
-  mainWindow.once('ready-to-show', () => {
-    if (settings.restoreLastState && savedBounds?.maximized) {
-      try { mainWindow.maximize(); } catch (e) {}
-    }
-    mainWindow.show();
-    mainWindow.focus();
+  win.loadFile(indexPath, IS_DEV ? { query: { dev: '1' } } : undefined).catch((error) => {
+    log.error('window', 'index.html の読み込みに失敗しました', error);
   });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  win.once('ready-to-show', () => {
+    if (TEST_MODE) return;
+    if (settings.restoreLastState && savedBounds?.maximized) {
+      try { win.maximize(); } catch {}
+    }
+    win.show();
+    win.focus();
+  });
+
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
   });
 }
 
-ipcMain.on('set-rpc', (event, data = {}) => {
-  if (!isMainWindowSender(event)) return;
-  if (!rpc || !settings.rpcEnabled) return;
+function applySettingsSideEffects(prev, next) {
+  if (TEST_MODE) return;
+  if (prev.startupLaunch !== next.startupLaunch) applyStartupSetting(next.startupLaunch);
 
-  if (data?.paused) {
-    try { rpc.clearActivity(); } catch (e) {}
-    return;
+  if (prev.cacheEnabled !== next.cacheEnabled && !next.cacheEnabled) {
+    session.defaultSession.clearCache().catch((error) => log.warn('cache', 'キャッシュ切り替え処理失敗', error));
   }
 
-  const title = String(data.title || '再生中').slice(0, 128);
-  const state = String(data.playlist || 'PlayPocketで再生中').slice(0, 128);
-  const now = Date.now();
-  const start = Number.isFinite(data.startTimestamp) ? data.startTimestamp : now;
-  const end = Number.isFinite(data.endTimestamp) ? data.endTimestamp : undefined;
+  if (prev.rpcEnabled !== next.rpcEnabled) ensureRPCState();
 
+  if (prev.alwaysOnTop !== next.alwaysOnTop && mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.setAlwaysOnTop(!!next.alwaysOnTop); } catch {}
+  }
+
+  if (prev.trayEnabled !== next.trayEnabled) applyTraySetting();
+  if (prev.keyboardShortcutsEnabled !== next.keyboardShortcutsEnabled) registerGlobalShortcuts();
+  if (prev.taskbarControlsEnabled !== next.taskbarControlsEnabled) updateThumbar(lastKnownIsPlaying);
+}
+
+function registerIpcHandlers() {
+  ipcMain.on(CH.RPC_SET, (event, data) => {
+    if (!isMainWindowSender(event)) return;
+    if (!settings.rpcEnabled) return;
+    const payload = Validators.sanitizeRpcPayload(data);
+    if (!payload) return;
+    rpcPendingActivity = payload;
+    flushRpcActivity();
+  });
+
+  ipcMain.on(CH.RPC_CLEAR, (event) => {
+    if (!isMainWindowSender(event)) return;
+    rpcPendingActivity = { paused: true };
+    flushRpcActivity();
+  });
+
+  ipcMain.on(CH.PLAYBACK_STATE, (event, data) => {
+    if (!isMainWindowSender(event)) return;
+    const state = Validators.sanitizePlaybackState(data);
+    if (state) updateThumbar(state.isPlaying);
+  });
+
+  ipcMain.on(CH.STATE_SAVE_FINAL, (event, partial) => {
+    if (!isMainWindowSender(event)) return;
+    mergeRuntimeState(partial, { immediate: true });
+  });
+
+  ipcMain.handle(CH.SETTINGS_GET, (event) => {
+    requireMainWindowSender(event);
+    return settings;
+  });
+
+  ipcMain.handle(CH.STARTUP_STATE, (event) => {
+    requireMainWindowSender(event);
+    return { settings, runtimeState };
+  });
+
+  ipcMain.handle(CH.SETTINGS_SET, (event, partial) => {
+    requireMainWindowSender(event);
+    const patch = Schema.sanitizeSettingsPatch(partial, PLATFORM);
+    if (Object.keys(patch).length === 0) return settings;
+    const prev = settings;
+    const next = updateSettings(patch);
+    applySettingsSideEffects(prev, next);
+    return next;
+  });
+
+  ipcMain.handle(CH.STATE_SAVE, (event, partial) => {
+    requireMainWindowSender(event);
+    mergeRuntimeState(partial);
+    return true;
+  });
+
+  ipcMain.handle(CH.CACHE_CLEAR, async (event) => {
+    requireMainWindowSender(event);
+    await session.defaultSession.clearCache();
+    return true;
+  });
+
+  ipcMain.handle(CH.EXTERNAL_OPEN, async (event, url) => {
+    requireMainWindowSender(event);
+    const safeUrl = Validators.sanitizeExternalUrl(url);
+    if (!safeUrl) return false;
+    await shell.openExternal(safeUrl);
+    return true;
+  });
+}
+
+if (process.platform === 'win32') {
+  try { app.setAppUserModelId(APP_ID); } catch {}
+}
+
+if (!settings.hardwareAcceleration) {
+  app.disableHardwareAcceleration();
+}
+
+if (!settings.cacheEnabled) {
+  app.commandLine.appendSwitch('disable-http-cache');
+} else {
   try {
-    rpc.setActivity({
-      details: title,
-      state,
-      startTimestamp: start,
-      endTimestamp: end,
-      largeImageKey: 'app',
-      largeImageText: 'PlayPocket',
-      instance: false
-    });
-  } catch (e) {
-    console.error('RPC error:', e);
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    app.commandLine.appendSwitch('disk-cache-dir', CACHE_DIR);
+  } catch (error) {
+    log.warn('cache', 'キャッシュディレクトリ設定失敗', error);
   }
-});
+}
 
-ipcMain.on('update-playback-state', (event, data = {}) => {
-  if (!isMainWindowSender(event)) return;
-  updateThumbar(!!data?.isPlaying);
-});
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+Menu.setApplicationMenu(null);
 
-ipcMain.on('clear-rpc', (event) => {
-  if (!isMainWindowSender(event)) return;
-  if (!rpc || !settings.rpcEnabled) return;
-  try {
-    rpc.clearActivity();
-  } catch (e) {
-    console.error('RPC clear error:', e);
-  }
-});
-
-ipcMain.handle('get-settings', (event) => {
-  requireMainWindowSender(event);
-  return settings;
-});
-
-ipcMain.handle('get-startup-state', (event) => {
-  requireMainWindowSender(event);
-  return {
-    settings,
-    runtimeState
-  };
-});
-
-ipcMain.handle('set-settings', async (event, partial = {}) => {
-  requireMainWindowSender(event);
-  const next = {
-    ...settings,
-    ...sanitizeSettingsInput(partial)
-  };
-
-  const prev = settings;
-  settings = next;
-  safeWriteJson(SETTINGS_PATH, settings);
-
-  if (prev.startupLaunch !== settings.startupLaunch) {
-    applyStartupSetting(settings.startupLaunch);
-  }
-
-  if (prev.cacheEnabled !== settings.cacheEnabled) {
-    try {
-      if (!settings.cacheEnabled) {
-        await session.defaultSession.clearCache();
-      }
-    } catch (e) {
-      console.warn('キャッシュ切り替え処理失敗:', e);
-    }
-  }
-
-  if (prev.rpcEnabled !== settings.rpcEnabled) {
-    if (!settings.rpcEnabled) shutdownRPC();
-    else ensureRPCState();
-  }
-
-  if (prev.alwaysOnTop !== settings.alwaysOnTop && mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.setAlwaysOnTop(!!settings.alwaysOnTop); } catch (e) {}
-  }
-
-  if (prev.trayEnabled !== settings.trayEnabled) {
-    applyTraySetting();
-  }
-
-  if (prev.keyboardShortcutsEnabled !== settings.keyboardShortcutsEnabled) {
-    registerGlobalShortcuts();
-  }
-
-  if (prev.taskbarControlsEnabled !== settings.taskbarControlsEnabled) {
-    updateThumbar(lastKnownIsPlaying);
-  }
-
-  return settings;
-});
-
-ipcMain.handle('save-runtime-state', async (event, partial = {}) => {
-  requireMainWindowSender(event);
-  const next = mergeRuntimeState(partial);
-  return next;
-});
-
-ipcMain.handle('clear-browser-cache', async (event) => {
-  requireMainWindowSender(event);
-  await session.defaultSession.clearCache();
-  return true;
-});
-
-ipcMain.handle('open-external', async (event, url) => {
-  requireMainWindowSender(event);
-  if (!isOfficialSiteUrl(url)) return false;
-  await shell.openExternal(url);
-  return true;
+app.on('web-contents-created', (_event, contents) => {
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.on('will-navigate', (navEvent) => navEvent.preventDefault());
+  contents.on('will-attach-webview', (attachEvent) => attachEvent.preventDefault());
 });
 
 app.on('second-instance', () => {
@@ -733,44 +644,48 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((webContents, permission, callback) => {
     callback(isAllowedPermissionRequest(webContents, permission));
   });
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+  ses.setPermissionCheckHandler((webContents, permission) => {
     return Boolean(webContents && isAllowedPermissionRequest(webContents, permission));
   });
-
-  createWindow();
-  applyTraySetting();
-  registerGlobalShortcuts();
-  updateThumbar(false);
-
-  setImmediate(() => {
-    applyStartupSetting(settings.startupLaunch);
-    ensureRPCState();
+  ses.webRequest.onBeforeRequest({ urls: BLOCKED_REQUEST_URLS }, (_details, callback) => {
+    callback({ cancel: true });
   });
 
+  registerIpcHandlers();
+  createWindow();
+
+  if (!TEST_MODE) {
+    applyTraySetting();
+    registerGlobalShortcuts();
+    updateThumbar(false);
+
+    setImmediate(() => {
+      applyStartupSetting(settings.startupLaunch);
+      ensureRPCState();
+    });
+  }
+
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else {
-      showMainWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else showMainWindow();
   });
 });
 
 app.on('before-quit', () => {
   isQuitting = true;
-  if (windowStateSaveTimer) {
-    clearTimeout(windowStateSaveTimer);
-    windowStateSaveTimer = null;
-  }
-  try {
-    mergeRuntimeState({ windowBounds: captureWindowBounds() });
-  } catch (e) {}
   shutdownRPC();
   destroyTray();
   globalShortcut.unregisterAll();
+  flushAllStores();
+});
+
+app.on('will-quit', () => {
+  stateStore.flushSync();
+  settingsStore.flushSync();
 });
 
 app.on('window-all-closed', () => {
@@ -778,10 +693,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+process.on('uncaughtException', (error) => {
+  log.error('process', 'Uncaught Exception', error);
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Rejection:', reason);
+  log.error('process', 'Unhandled Rejection', reason);
 });

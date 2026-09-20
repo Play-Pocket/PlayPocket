@@ -1,22 +1,25 @@
 {
   "name": "PlayPocket",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "description": "Offline playlist player (PlayPocket)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --publish never",
-    "dist": "electron-builder --publish never"
+    "test": "node --test \"test/*.test.js\"",
+    "verify": "node scripts/verify-release.js",
+    "build": "node scripts/verify-release.js && electron-builder --publish never",
+    "dist": "node scripts/verify-release.js && electron-builder --publish never"
   },
   "author": "Takkunlego0916",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^41.10.3",
+    "electron": "^44.4.3",
     "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "io.github.takkunlego0916.playpocket",
     "productName": "PlayPocket",
+    "artifactName": "${productName}.${version}.${ext}",
     "directories": {
       "output": "dist"
     },
@@ -26,6 +29,7 @@
     "npmRebuild": false,
     "files": [
       "app/**/*",
+      "main/**/*",
       "main.js",
       "preload.js",
       "package.json",
@@ -35,7 +39,7 @@
     ],
     "win": {
       "target": [
-        "portable"
+        "zip"
       ],
       "icon": "app/icons/appIcon.ico"
     },
