@@ -125,7 +125,7 @@ function checkIpcChannels() {
   expect('preload.js channel names equal main/channels.js', JSON.stringify(preloadChannels) === JSON.stringify(channels), { preloadChannels, channels });
 
   const mainSource = read('main.js');
-  const usedKeys = new Set([...mainSource.matchAll(/CH\.([A-Z_]+)/g)].map((m) => m[1]));
+  const usedKeys = new Set([...mainSource.matchAll(/CH\.([A-Z0-9_]+)/g)].map((m) => m[1]));
   expect('every channel used by main.js is defined', [...usedKeys].every((key) => key in channels), [...usedKeys].filter((key) => !(key in channels)));
   const commands = read('main/validators.js').match(/PLAYBACK_COMMANDS = Object\.freeze\((\[[^\]]*\])\)/);
   const preloadCommands = preload.match(/PLAYBACK_COMMANDS = new Set\((\[[^\]]*\])\)/);
@@ -232,7 +232,7 @@ function checkRequiredFiles(pkg) {
   } else {
     ok('every literal build.files entry exists');
   }
-  const required = ['app/index.html', 'app/styles.css', 'app/icons/appIcon.ico', 'main.js', 'preload.js', 'main/channels.js', 'app/shared/schema.js'];
+  const required = ['app/index.html', 'app/styles.css', 'app/icons/appIcon.ico', 'app/icons/thumb-prev.png', 'app/icons/thumb-play.png', 'app/icons/thumb-pause.png', 'app/icons/thumb-next.png', 'main.js', 'preload.js', 'main/channels.js', 'app/shared/schema.js'];
   const absent = required.filter((file) => !exists(file));
   expect('required application files exist', absent.length === 0, absent);
   const icon = pkg.build && pkg.build.win && pkg.build.win.icon;
