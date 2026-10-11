@@ -200,7 +200,7 @@ async function main() {
       bridgeCalls: window.__bridge.calls.map((c) => `${c.name}:${JSON.stringify(c.args)}`)
     }));
     check('android: init resolved and platform is android', ready === true && r.platform === 'android', r);
-    check('android: version label is 1.5.2', r.version.includes('1.5.2'), r.version);
+    check('android: version label is 1.5.3', r.version.includes('1.5.3'), r.version);
     check('android: deck B is unmuted and audio context runs', r.snap.decks[1].muted === false && r.snap.ctxState === 'running', r.snap);
     check('android: desktop-only settings are disabled, notification setting is usable', r.disabled.every(Boolean) && r.notifRow !== 'none' && r.notifEnabled === false, r);
     check('android: defaults differ from desktop (rpc off, minimize-on-close off)', r.settings.rpcEnabled === false && r.settings.minimizeOnClose === false && r.settings.resumePlayback === true && !('trayEnabled' in r.settings), r.settings);
@@ -219,7 +219,7 @@ async function main() {
       ]);
       const after = PP.state.items.length;
       const infos = await PP.db.getVideoInfos(PP.state.items);
-      const fake = infos.find((i) => i.name === 'fake.mkv');
+      const fake = infos.find((i) => i.name === 'fake.mp4');
       const out = { added: after - before, fakeMime: fake && fake.mimeType, fakeHasBlob: fake && fake.hasBlob, urls: PP.media.urls.count() };
       const li = [...document.querySelectorAll('.track-item')].find((l) => l.querySelector('.title').textContent === 'fake');
       li.querySelector('.remove').click();
@@ -506,7 +506,7 @@ async function main() {
       const out = {};
       const bridge = window.__bridge;
       const before = Object.keys(bridge.saved).length;
-      await PP.db.putVideo({ id: 'huge-1', name: 'huge.mp4', duration: 10, mimeType: 'video/mp4', size: 200 * 1024 * 1024, blob: new Blob(['x']), thumbnail: null });
+      await PP.db.putVideo({ id: 'huge-1', name: 'huge.mp4', duration: 10, mimeType: 'video/mp4', size: 400 * 1024 * 1024, blob: new Blob(['x']), thumbnail: null });
       await PP.db.putPlaylist({ name: 'Huge', items: ['huge-1'] });
       await PP.library.refreshAll();
       [...document.querySelectorAll('.playlist-name')].find((n) => n.textContent === 'Huge').click();
@@ -531,7 +531,7 @@ async function main() {
       await __t.waitFor(() => PP.state.currentPlaylist !== 'Huge', 5000);
       return out;
     });
-    check('guard: embedded export over 150MB is refused on Android with an explanation', r.alert.includes('この端末では埋め込みエクスポートに失敗する可能性'), r);
+    check('guard: embedded export over the device limit is refused on Android with an explanation', r.alert.includes('この端末では埋め込みエクスポートに失敗する可能性'), r);
     check('guard: share package over the device limit is refused, nothing is written', r.share.includes('この端末では動画の合計サイズが大きすぎて') && r.nothingSaved, r);
     check('guard: metadata-only export is still available', r.metaStillWorks, r);
   });
