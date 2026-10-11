@@ -11,9 +11,9 @@
     MAX_PLAYLIST_NAME_LENGTH: 80,
     MAX_IMPORTED_ITEMS: 500,
     MAX_IMPORTED_JSON_BYTES: 50 * 1024 * 1024,
-    MAX_SHARED_PACKAGE_BYTES: 500 * 1024 * 1024,
     MAX_VIDEO_FILES_PER_DROP: 100,
     MAX_THUMBNAIL_LENGTH: 2000000,
+    PLACEHOLDER_THUMB: `data:image/svg+xml;utf8,${encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 90'><rect width='160' height='90' fill='#1b1b1b'/><circle cx='70' cy='58' r='9' fill='#1db954'/><rect x='77' y='26' width='4' height='32' fill='#1db954'/><path d='M81 26 q15 4 15 17 q-7 -9 -15 -9z' fill='#1db954'/></svg>")}`,
     SHARE_PACKAGE_EXTENSION: '.playpocket.json',
     BASE64_CHUNK_BYTES: 3 * 1024 * 1024,
     NORMALIZATION_TARGET_RMS: 0.12,
@@ -35,8 +35,39 @@
       'video/ogg',
       'video/x-matroska',
       'video/quicktime',
-      'video/x-msvideo'
-    ])
+      'video/x-msvideo',
+      'audio/mpeg',
+      'audio/mp4',
+      'audio/x-m4a',
+      'audio/aac',
+      'audio/wav',
+      'audio/x-wav',
+      'audio/flac',
+      'audio/x-flac',
+      'audio/ogg',
+      'audio/opus',
+      'audio/webm'
+    ]),
+    VIDEO_EXTENSIONS: Object.freeze(['mp4', 'm4v', 'mov', 'webm', 'ogv', 'mkv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'm2ts', 'mts', '3gp']),
+    AUDIO_EXTENSIONS: Object.freeze(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'weba']),
+    EXTENSION_MIME: Object.freeze({
+      mp4: 'video/mp4',
+      m4v: 'video/mp4',
+      mov: 'video/quicktime',
+      webm: 'video/webm',
+      ogv: 'video/ogg',
+      mkv: 'video/x-matroska',
+      avi: 'video/x-msvideo',
+      mp3: 'audio/mpeg',
+      m4a: 'audio/mp4',
+      aac: 'audio/aac',
+      wav: 'audio/wav',
+      flac: 'audio/flac',
+      ogg: 'audio/ogg',
+      oga: 'audio/ogg',
+      opus: 'audio/opus',
+      weba: 'audio/webm'
+    })
   });
 
   const query = new URLSearchParams(window.location.search);
@@ -204,6 +235,37 @@
     return 'video/mp4';
   }
 
+  function fileExtension(name) {
+    if (typeof name !== 'string') return '';
+    const dot = name.lastIndexOf('.');
+    return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+  }
+
+  function isAudioFile(file) {
+    if (!file) return false;
+    if (typeof file.type === 'string' && file.type.startsWith('audio/')) return true;
+    return C.AUDIO_EXTENSIONS.includes(fileExtension(file.name));
+  }
+
+  function resolveMimeType(file) {
+    const type = file && typeof file.type === 'string' ? file.type : '';
+    if (C.ALLOWED_VIDEO_TYPES.has(type)) return type;
+    return C.EXTENSION_MIME[fileExtension(file && file.name)] || 'video/mp4';
+  }
+
+  function formatSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+    if (mb >= 10) return `${Math.round(mb)} MB`;
+    if (mb >= 1) return `${mb.toFixed(1)} MB`;
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  function isAudioMime(type) {
+    return typeof type === 'string' && type.startsWith('audio/');
+  }
+
   function displayTitle(name) {
     const text = safeText(name) || 'video';
     return text.replace(/\.[^/.]+$/, '');
@@ -213,6 +275,16 @@
     let filename = safeText(value).replace(/[<>:"/\\|?*]/g, '-').replace(/[. ]+$/g, '').slice(0, 120);
     if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(filename)) filename = `_${filename}`;
     return filename || fallback;
+  }
+
+  function formatByteLimit(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) {
+      const rounded = Math.round(gb * 100) / 100;
+      return `${rounded}GB`;
+    }
+    return `${Math.round(bytes / (1024 * 1024))}MB`;
   }
 
   function shuffleArray(arr) {
@@ -270,8 +342,14 @@
     formatTime,
     sanitizeThumbnail,
     sanitizeMimeType,
+    fileExtension,
+    isAudioFile,
+    isAudioMime,
+    formatSize,
+    resolveMimeType,
     displayTitle,
     sanitizeFilename,
+    formatByteLimit,
     shuffleArray,
     delay,
     byId

@@ -23,13 +23,35 @@
     copyCode: util.byId('copyShareCodeBtn'),
     codeInput: util.byId('shareCodeInput'),
     importCode: util.byId('importShareCodeBtn'),
-    shareStatus: util.byId('shareStatus')
+    shareStatus: util.byId('shareStatus'),
+    trackSearch: util.byId('trackSearch'),
+    trackSort: util.byId('trackSort'),
+    trackCount: util.byId('trackCount'),
+    trackEmpty: util.byId('trackEmpty'),
+    dropOverlay: util.byId('dropOverlay')
   };
+
+  const PLACEHOLDER_THUMB = C.PLACEHOLDER_THUMB;
+  const KATAKANA_START = 0x30A1;
+  const KATAKANA_END = 0x30F6;
+  const KANA_OFFSET = 0x60;
 
   let renderToken = 0;
   let addQueue = Promise.resolve();
   let dragOverEl = null;
   let highlightedId = null;
+  let trackQuery = '';
+  let fileDragDepth = 0;
+
+  function foldText(text) {
+    const normalized = String(text || '').normalize('NFKC').toLowerCase();
+    let out = '';
+    for (const ch of normalized) {
+      const code = ch.codePointAt(0);
+      out += code >= KATAKANA_START && code <= KATAKANA_END ? String.fromCodePoint(code - KANA_OFFSET) : ch;
+    }
+    return out.trim();
+  }
 
   function infoCache() {
     return PP.cache.videoInfo;
@@ -69,6 +91,12 @@
     return fallback;
   }
 
+  function replaceExtensionWithMp4(name) {
+    const base = util.safeText(name) || 'video';
+    const dot = base.lastIndexOf('.');
+    return `${dot > 0 ? base.slice(0, dot) : base}.mp4`;
+  }
+
   function updateTotalDuration() {
     let total = 0;
     for (const id of state.items) total += infoCache().get(id)?.duration || 0;
@@ -80,15 +108,18 @@
     li.className = 'track-item';
     li.dataset.index = String(index);
     li.dataset.id = info.id;
+    li.dataset.search = foldText(util.displayTitle(info.name));
     li.draggable = true;
     if (isPlaying) li.classList.add('playing');
 
+    const thumbnail = util.sanitizeThumbnail(info.thumbnail);
     const img = document.createElement('img');
     img.className = 'thumb';
     img.alt = 'サムネイル';
     img.decoding = 'async';
     img.referrerPolicy = 'no-referrer';
-    img.src = util.sanitizeThumbnail(info.thumbnail) ?? '';
+    img.src = thumbnail ?? PLACEHOLDER_THUMB;
+    if (!thumbnail) li.classList.add('no-thumb');
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -96,11 +127,12 @@
     const title = document.createElement('div');
     title.className = 'title';
     title.textContent = util.displayTitle(info.name);
+    title.title = title.textContent;
 
     const sub = document.createElement('div');
     sub.className = 'sub';
-    const sizeMB = Number.isFinite(info.size) ? Math.round(info.size / 1024 / 1024) : 0;
-    sub.textContent = `${util.formatTime(info.duration)} • ${sizeMB} MB`;
+    const kind = util.isAudioMime(info.mimeType) ? '音声 • ' : '';
+    sub.textContent = `${kind}${util.formatTime(info.duration)} • ${util.formatSize(info.size)}`;
 
     meta.append(title, sub);
 
@@ -131,6 +163,71 @@
     });
     highlightedId = state.currentTrackId;
     el.trackList.replaceChildren(fragment);
+    applyTrackFilter();
+  }
+
+  function applyTrackFilter() {
+    const query = trackQuery;
+    let shown = 0;
+    for (const li of el.trackList.children) {
+      const match = !query || (li.dataset.search || '').includes(query);
+      li.hidden = !match;
+      if (match) shown += 1;
+    }
+    const total = state.items.length;
+    if (el.trackCount) el.trackCount.textContent = query ? `${shown} / ${total} 件` : (total > 0 ? `${total} 件` : '');
+    if (el.trackEmpty) {
+      const noItems = total === 0;
+      const noMatch = !noItems && query !== '' && shown === 0;
+      el.trackEmpty.hidden = !(noItems || noMatch);
+      el.trackEmpty.textContent = noItems
+        ? 'このプレイリストにはまだ動画や音楽がありません。「ファイルを追加」から追加するか、ここにドラッグ＆ドロップしてください。'
+        : '一致するトラックがありません。';
+    }
+  }
+
+  function setTrackQuery(value) {
+    trackQuery = foldText(value);
+    applyTrackFilter();
+  }
+
+  function focusTrackSearch() {
+    if (!el.trackSearch) return false;
+    el.trackSearch.focus();
+    el.trackSearch.select();
+    return true;
+  }
+
+  function collator() {
+    return new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+  }
+
+  async function sortTracks(kind) {
+    if (!state.currentPlaylist || !kind) return;
+    const playlist = await db.getPlaylist(state.currentPlaylist);
+    if (!playlist || playlist.items.length < 2) return;
+    const missing = playlist.items.filter((id) => !infoCache().has(id));
+    if (missing.length > 0) {
+      for (const info of await db.getVideoInfos(missing)) infoCache().set(info.id, info);
+    }
+    const infoOf = (id) => infoCache().get(id) || { name: '', duration: 0, size: 0 };
+    const compare = collator().compare;
+    const ids = playlist.items.slice();
+    if (kind === 'name-asc') ids.sort((a, b) => compare(infoOf(a).name, infoOf(b).name));
+    else if (kind === 'name-desc') ids.sort((a, b) => compare(infoOf(b).name, infoOf(a).name));
+    else if (kind === 'duration-asc') ids.sort((a, b) => infoOf(a).duration - infoOf(b).duration);
+    else if (kind === 'duration-desc') ids.sort((a, b) => infoOf(b).duration - infoOf(a).duration);
+    else if (kind === 'size-asc') ids.sort((a, b) => infoOf(a).size - infoOf(b).size);
+    else if (kind === 'size-desc') ids.sort((a, b) => infoOf(b).size - infoOf(a).size);
+    else if (kind === 'reverse') ids.reverse();
+    else if (kind === 'shuffle') util.shuffleArray(ids);
+    else return;
+    if (ids.every((id, index) => id === playlist.items[index])) return;
+    await db.putPlaylist({ name: playlist.name, items: ids });
+    if (state.currentPlaylist !== playlist.name) return;
+    applyItems(ids);
+    renderTrackList();
+    PP.player.scheduleSessionSave();
   }
 
   async function refreshTrackList() {
@@ -196,6 +293,8 @@
   }
 
   async function switchTo(name) {
+    trackQuery = '';
+    if (el.trackSearch) el.trackSearch.value = '';
     const playlist = name ? await db.getPlaylist(name) : null;
     state.currentPlaylist = playlist ? name : (name || null);
     state.items = playlist ? playlist.items.slice() : [];
@@ -264,6 +363,7 @@
   async function deletePlaylist(name) {
     if (!PP.ui.confirm(`プレイリスト「${name}」を削除しますか？`)) return;
     const { deletedVideoIds, remainingNames } = await db.deletePlaylist(name);
+    if (state.currentTrackId && deletedVideoIds.includes(state.currentTrackId)) PP.player.stopAll();
     forget(deletedVideoIds);
     if (state.currentPlaylist === name) await switchTo(remainingNames[0] || null);
     pruneInfoCache();
@@ -297,9 +397,9 @@
 
   function isSupportedVideoFile(file) {
     if (!(file instanceof File)) return false;
-    if (typeof file.type === 'string' && file.type.startsWith('video/')) return true;
-    if (PP.platform.capabilities.extensionVideoFallback) return /\.(mp4|webm|mov|m4v|ogg|mkv)$/i.test(file.name || '');
-    return false;
+    if (typeof file.type === 'string' && (file.type.startsWith('video/') || file.type.startsWith('audio/'))) return true;
+    const ext = util.fileExtension(file.name);
+    return C.VIDEO_EXTENSIONS.includes(ext) || C.AUDIO_EXTENSIONS.includes(ext);
   }
 
   async function doAddFiles(files) {
@@ -310,19 +410,50 @@
     }
     const target = state.currentPlaylist;
     let failure = null;
+    const transcodeFailures = [];
+
+    const needsAnyTranscode = files.some((file) => media.needsMp4Transcode(file));
+    const progressDialog = needsAnyTranscode
+      ? PP.dialogs.progress({ title: '動画をMP4に変換しています', label: '' })
+      : null;
 
     await db.batch(async () => {
+      let fileIndex = 0;
       for (const file of files) {
+        fileIndex += 1;
         try {
-          const { duration, thumbnail } = await media.probeVideo(file);
+          const needsTranscode = media.needsMp4Transcode(file);
+          let probe = needsTranscode ? { duration: 0, thumbnail: null } : await media.probeVideo(file);
+
+          let mimeType = util.resolveMimeType(file);
+          let blob = file.slice(0, file.size, mimeType);
+          let name = util.safeText(file.name) || 'video';
+          let size = file.size;
+
+          if (needsTranscode) {
+            progressDialog?.setLabel(`変換中 (${fileIndex}/${files.length}): ${name}`);
+            progressDialog?.setPercent(0);
+            try {
+              blob = await media.transcodeToMp4(file, (percent) => progressDialog?.setPercent(percent));
+              mimeType = 'video/mp4';
+              name = replaceExtensionWithMp4(name);
+              size = blob.size;
+              probe = await media.probeVideo(blob);
+            } catch (transcodeError) {
+              log.warn('library', `MP4変換に失敗しました: ${file.name}`, transcodeError);
+              transcodeFailures.push(file.name || 'video');
+              continue;
+            }
+          }
+
           const record = {
             id: util.uid(),
-            name: util.safeText(file.name) || 'video',
-            duration: util.clampNumber(duration, 0),
-            mimeType: util.sanitizeMimeType(file.type),
-            blob: file.slice(0, file.size, file.type || 'video/mp4'),
-            thumbnail,
-            size: file.size
+            name,
+            duration: util.clampNumber(probe.duration, 0),
+            mimeType,
+            blob,
+            thumbnail: probe.thumbnail,
+            size
           };
           const items = await db.addVideoToPlaylist(record, target);
           infoCache().set(record.id, db.toInfo(record));
@@ -334,11 +465,16 @@
       }
     });
 
+    progressDialog?.close();
+
     if (failure) {
       report(CATEGORY.DATABASE, failure, {
         scope: 'add-files',
         message: saveErrorMessage(failure, '動画の保存に失敗しました。もう一度お試しください。')
       });
+    }
+    if (transcodeFailures.length > 0) {
+      PP.ui.alert(`${transcodeFailures.length} 本の動画はMP4への変換に失敗したため追加できませんでした: ${transcodeFailures.join(', ')}`);
     }
     await refreshAll();
     PP.player.scheduleSessionSave();
@@ -520,9 +656,9 @@
       const { name, blob } = await buildExportBlob({
         includeBlobs: true,
         header: '"format":"playpocket-share","version":1,"mediaIncluded":true,',
-        maxBytes: C.MAX_SHARED_PACKAGE_BYTES
+        maxBytes: PP.platform.maxSharedPackageBytes
       });
-      if (blob.size > C.MAX_SHARED_PACKAGE_BYTES) throw new PPError('too-large', 'share-package-too-large', { category: CATEGORY.IMPORT_EXPORT });
+      if (blob.size > PP.platform.maxSharedPackageBytes) throw new PPError('too-large', 'share-package-too-large', { category: CATEGORY.IMPORT_EXPORT });
       const result = await media.downloadBlob(blob, `${util.sanitizeFilename(name)}${C.SHARE_PACKAGE_EXTENSION}`);
       if (result === 'cancelled') setShareStatus('保存をキャンセルしました。');
       else if (result === 'failed') setShareStatus('共有ファイルを保存できませんでした。空き容量を確認して、もう一度試してください。', 'error');
@@ -533,7 +669,7 @@
       const expected = error && (error.code === 'too-large' || error.code === 'device-too-large');
       report(expected ? CATEGORY.USER_INPUT : CATEGORY.IMPORT_EXPORT, error, { scope: 'share-package', notify: false });
       let message = '共有ファイルを作成できませんでした。動画の容量を確認して、もう一度試してください。';
-      if (error && error.code === 'too-large') message = '共有ファイルは 500MB までです。動画を減らして、もう一度試してください。';
+      if (error && error.code === 'too-large') message = `共有ファイルは ${util.formatByteLimit(PP.platform.maxSharedPackageBytes)} までです。動画を減らして、もう一度試してください。`;
       else if (error && error.code === 'device-too-large') message = 'この端末では動画の合計サイズが大きすぎて共有ファイルを作成できません。動画を減らすか、軽量共有コードをお使いください。';
       setShareStatus(message, 'error');
     } finally {
@@ -600,7 +736,7 @@
 
   async function importFromFile(file) {
     const maxBytes = file.name.toLowerCase().endsWith(C.SHARE_PACKAGE_EXTENSION)
-      ? C.MAX_SHARED_PACKAGE_BYTES
+      ? PP.platform.maxSharedPackageBytes
       : C.MAX_IMPORTED_JSON_BYTES;
     if (file.size > maxBytes) throw new PPError('file-too-large', 'file-too-large', { category: CATEGORY.IMPORT_EXPORT });
     let text = await file.text();
@@ -722,6 +858,69 @@
     });
   }
 
+  function hasFiles(event) {
+    const types = event.dataTransfer && event.dataTransfer.types;
+    return !!types && Array.from(types).includes('Files');
+  }
+
+  function showDropOverlay(visible) {
+    if (el.dropOverlay) el.dropOverlay.classList.toggle('show', visible);
+  }
+
+  function isModalOpen() {
+    return !!document.querySelector('.settings-modal.open');
+  }
+
+  function bindWindowDrop() {
+    document.addEventListener('dragenter', (event) => {
+      if (!hasFiles(event) || isModalOpen()) return;
+      fileDragDepth += 1;
+      showDropOverlay(true);
+    });
+    document.addEventListener('dragleave', (event) => {
+      if (!hasFiles(event)) return;
+      fileDragDepth = Math.max(0, fileDragDepth - 1);
+      if (fileDragDepth === 0) showDropOverlay(false);
+    });
+    document.addEventListener('dragover', (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = isModalOpen() ? 'none' : 'copy';
+    });
+    document.addEventListener('drop', guard(CATEGORY.SYSTEM, async (event) => {
+      if (!hasFiles(event)) return;
+      const handledByDropZone = event.defaultPrevented;
+      event.preventDefault();
+      fileDragDepth = 0;
+      showDropOverlay(false);
+      if (handledByDropZone || isModalOpen()) return;
+      await addFiles(event.dataTransfer.files);
+    }, { scope: 'window-drop' }));
+    window.addEventListener('blur', () => {
+      fileDragDepth = 0;
+      showDropOverlay(false);
+    });
+  }
+
+  function bindTrackTools() {
+    el.trackSearch?.addEventListener('input', () => setTrackQuery(el.trackSearch.value));
+    el.trackSearch?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      if (el.trackSearch.value) {
+        el.trackSearch.value = '';
+        setTrackQuery('');
+      } else {
+        el.trackSearch.blur();
+      }
+    });
+    el.trackSort?.addEventListener('change', guard(CATEGORY.SYSTEM, async () => {
+      const kind = el.trackSort.value;
+      el.trackSort.value = '';
+      await sortTracks(kind);
+    }, { scope: 'sort' }));
+  }
+
   function bindShare() {
     el.shareBtn?.addEventListener('click', () => {
       if (!state.currentPlaylist) {
@@ -745,6 +944,8 @@
     bindTrackList();
     bindPlaylists();
     bindFileInputs();
+    bindWindowDrop();
+    bindTrackTools();
     bindShare();
     el.createBtn.addEventListener('click', guard(CATEGORY.SYSTEM, () => createPlaylist(), { scope: 'create-playlist' }));
     bus.on('player:track-changed', updateHighlight);
@@ -772,6 +973,7 @@
     refreshTrackList,
     isShareModalOpen,
     closeShareModal,
+    focusTrackSearch,
     loadCurrent
   });
 }());

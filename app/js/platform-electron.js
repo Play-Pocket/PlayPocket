@@ -39,6 +39,7 @@
   PP.platform = Object.freeze({
     name: 'electron',
     capabilities: Object.freeze({ keyboard: true, sidebar: false, fullscreenApi: true, extensionVideoFallback: false, flushOnHidden: false }),
+    maxSharedPackageBytes: 2 * 1024 * 1024 * 1024,
 
     async loadStartup() {
       let settings = null;
@@ -91,6 +92,12 @@
       if (!api?.clearBrowserCache) return false;
       await api.clearBrowserCache();
       return true;
+    },
+
+    async transcodeToMp4(file, onProgress) {
+      if (!api?.transcodeFile) throw new Error('transcode-unsupported');
+      const bytes = await api.transcodeFile(file, onProgress);
+      return new Blob([bytes], { type: 'video/mp4' });
     },
 
     async openExternal(url) {

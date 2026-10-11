@@ -19,6 +19,7 @@
   let gaplessTimer = null;
   let gestureAttached = false;
   let masterVolume = 1;
+  let outputScale = 1;
   let playbackRate = 1;
   let monoEnabled = false;
   let config = {
@@ -148,11 +149,25 @@
     deck.graph.normGain.gain.setTargetAtTime(value, audioCtx.currentTime, 0.08);
   }
 
+  function effectiveVolume() {
+    return util.clamp(masterVolume * outputScale, 0, 1);
+  }
+
+  function applyDeckVolume() {
+    const value = effectiveVolume();
+    for (const deck of decks) {
+      if (deck.el) deck.el.volume = value;
+    }
+  }
+
   function setVolume(value) {
     masterVolume = util.clamp(Number.isFinite(value) ? value : 1, 0, 1);
-    for (const deck of decks) {
-      if (deck.el) deck.el.volume = masterVolume;
-    }
+    applyDeckVolume();
+  }
+
+  function setOutputScale(value) {
+    outputScale = util.clamp(Number.isFinite(value) ? value : 1, 0, 1);
+    applyDeckVolume();
   }
 
   function getVolume() {
@@ -199,7 +214,7 @@
     deck.trackId = trackId;
     deck.ready = false;
     deck.el.src = deck.url;
-    deck.el.volume = masterVolume;
+    deck.el.volume = effectiveVolume();
     deck.el.playbackRate = playbackRate;
     deck.el.load();
   }
@@ -560,6 +575,7 @@
     bindActiveEvents,
     setVolume,
     getVolume,
+    setOutputScale,
     setPlaybackRate,
     applyAudioPreset,
     setMono,
