@@ -18,6 +18,32 @@ const STAGING_PREFIX = `.${INSTALL_FOLDER_NAME}-staging-`;
 const BACKUP_PREFIX = `.${INSTALL_FOLDER_NAME}-backup-`;
 const WALK_MAX_DEPTH = 8;
 const WALK_MAX_ENTRIES = 20000;
+const RETRYABLE_RENAME_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLockError(error) {
+  return Boolean(error) && RETRYABLE_RENAME_CODES.has(error.code);
+}
+
+async function renameWithRetry(from, to, options = {}) {
+  const attempts = options.attempts ?? 8;
+  const baseDelay = options.delay ?? 300;
+  let lastError = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await fsp.rename(from, to);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isLockError(error)) throw error;
+      if (i < attempts - 1) await sleep(Math.min(baseDelay * (i + 1), 2000));
+    }
+  }
+  throw lastError;
+}
 
 async function existsDir(dir) {
   try {
@@ -57,7 +83,7 @@ async function removeFileSafe(filePath) {
 
 async function removeDirSafe(dirPath) {
   try {
-    await fsp.rm(dirPath, { recursive: true, force: true });
+    await fsp.rm(dirPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   } catch {}
 }
 
@@ -115,6 +141,54 @@ function compareVersions(a, b) {
     if (diff !== 0) return diff;
   }
   return 0;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return '--';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[unit]}`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.round(Number(seconds));
+  if (!Number.isFinite(total) || total < 0) return '--';
+  if (total < 60) return `${total}秒`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}分${String(total % 60).padStart(2, '0')}秒`;
+  return `${Math.floor(minutes / 60)}時間${String(minutes % 60).padStart(2, '0')}分`;
+}
+
+async function getFreeBytes(targetPath) {
+  let current = path.resolve(targetPath);
+  while (true) {
+    try {
+      const stats = await fsp.statfs(current);
+      const free = Number(stats.bavail) * Number(stats.bsize);
+      return Number.isFinite(free) ? free : null;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+}
+
+async function assertEnoughDiskSpace(targetPath, requiredBytes, label) {
+  if (!(Number(requiredBytes) > 0)) return null;
+  const free = await getFreeBytes(targetPath);
+  if (free === null) return null;
+  if (free < requiredBytes) {
+    throw new Error(`${label}の空き容量が不足しています（必要: 約 ${formatBytes(requiredBytes)} / 空き: ${formatBytes(free)}）。空き容量を確保してからもう一度お試しください`);
+  }
+  return free;
 }
 
 function isExecutableNameAllowed(fileName) {
@@ -241,7 +315,7 @@ async function recoverInterruptedInstall(installDir) {
     if (candidates.length === 0) return false;
 
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    await fsp.rename(candidates[0].full, installDir);
+    await renameWithRetry(candidates[0].full, installDir);
     return true;
   } catch {
     return false;
@@ -265,6 +339,9 @@ module.exports = {
   INSTALL_MANIFEST_FILE,
   STAGING_PREFIX,
   BACKUP_PREFIX,
+  sleep,
+  isLockError,
+  renameWithRetry,
   existsDir,
   ensureDir,
   readJson,
@@ -275,6 +352,10 @@ module.exports = {
   walkFiles,
   extractVersionFromText,
   compareVersions,
+  formatBytes,
+  formatDuration,
+  getFreeBytes,
+  assertEnoughDiskSpace,
   findLatestExe,
   readInstallManifest,
   writeInstallManifest,
