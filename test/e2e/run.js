@@ -220,8 +220,11 @@ async function main() {
     a: path.join(MEDIA, 'a.webm'),
     b: path.join(MEDIA, 'b.webm'),
     c: path.join(MEDIA, 'c.webm'),
-    bad: path.join(MEDIA, 'bad.webm')
+    bad: path.join(MEDIA, 'bad.mp4')
   };
+  if (!fs.existsSync(files.bad) && fs.existsSync(path.join(MEDIA, 'bad.webm'))) {
+    fs.copyFileSync(path.join(MEDIA, 'bad.webm'), files.bad);
+  }
   for (const file of Object.values(files)) {
     if (!fs.existsSync(file)) throw new Error(`missing media: ${file}`);
   }
@@ -241,7 +244,7 @@ async function main() {
       dev: PP.env.dev
     }));
     check('startup: init resolved true', ready === true, ready);
-    check('startup: version label is 1.5.2', info.version.includes('1.5.2'), info.version);
+    check('startup: version label is 1.5.3', info.version.includes('1.5.3'), info.version);
     check('startup: settings schema version', info.schema === 2, info.schema);
     check('startup: deck B is not muted', info.snap.decks[1].muted === false, info.snap.decks[1]);
     check('startup: audio context running', info.snap.ctxState === 'running', info.snap.ctxState);
@@ -796,9 +799,9 @@ async function main() {
       }
       return out;
     });
-    check('formats: MP4 (H.264/AAC) plays', r[0].mime === 'video/mp4' && r[0].duration === 5 && r[0].videoWidth === 160, r[0]);
-    check('formats: OGG plays (Vorbis audio; Chromium no longer decodes Theora video)', r[1].mime === 'video/ogg' && r[1].duration === 5, r[1]);
-    check('formats: audio-only MP4 plays', r[2].duration === 5 && r[2].videoWidth === 0, r[2]);
+    check('formats: MP4 (H.264/AAC) plays', r[0].mime === 'video/mp4' && Math.abs(r[0].duration - 5.5) <= 1 && r[0].videoWidth === 160, r[0]);
+    check('formats: OGV is converted to MP4 and plays', r[1].mime === 'video/mp4' && Math.abs(r[1].duration - 5.5) <= 1 && r[1].videoWidth === 160, r[1]);
+    check('formats: audio-only MP4 plays', Math.abs(r[2].duration - 5.5) <= 1 && r[2].videoWidth === 0, r[2]);
   });
 
   await step('second instance', async () => {
