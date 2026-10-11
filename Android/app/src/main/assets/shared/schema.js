@@ -80,7 +80,8 @@
     defineSetting('gaplessEnabled', 'boolean', { electron: true, android: true }),
     defineSetting('seamlessPlayback', 'boolean', { electron: true, android: true }),
     defineSetting('volumeNormalization', 'boolean', { electron: false, android: false }),
-    defineSetting('monoAudio', 'boolean', { electron: false, android: false })
+    defineSetting('monoAudio', 'boolean', { electron: false, android: false }),
+    defineSetting('autoTranscodeMp4', 'boolean', { electron: true })
   ]);
 
   const SETTINGS_MIGRATIONS = Object.freeze({});

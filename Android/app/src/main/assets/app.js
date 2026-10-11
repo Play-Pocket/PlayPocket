@@ -61,10 +61,48 @@
     if (event.key === 'Escape' && closePanels()) return;
     if (!PP.platform.capabilities.keyboard) return;
     if (!PP.settings.get().keyboardShortcutsEnabled) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.code === 'KeyF') {
+      if (PP.library.focusTrackSearch()) event.preventDefault();
+      return;
+    }
     if (isEditableTarget(event.target)) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
 
+    if (!event.shiftKey && /^Digit[0-9]$/.test(event.code)) {
+      event.preventDefault();
+      PP.player.seekToRatio(Number(event.code.slice(5)) / 10);
+      return;
+    }
+
     switch (event.code) {
+      case 'ArrowUp':
+        event.preventDefault();
+        PP.player.adjustVolume(PP.player.volumeStep);
+        break;
+      case 'ArrowDown':
+        event.preventDefault();
+        PP.player.adjustVolume(-PP.player.volumeStep);
+        break;
+      case 'KeyM':
+        event.preventDefault();
+        PP.player.toggleMute();
+        break;
+      case 'KeyR':
+        event.preventDefault();
+        PP.player.cycleRepeatMode();
+        break;
+      case 'Comma':
+        event.preventDefault();
+        PP.player.stepSpeed(-1);
+        break;
+      case 'Period':
+        event.preventDefault();
+        PP.player.stepSpeed(1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        PP.player.seekToRatio(0);
+        break;
       case 'Space':
         event.preventDefault();
         await PP.player.togglePlayPause();
@@ -113,8 +151,8 @@
 
     el.clearCache?.addEventListener('click', async () => {
       try {
-        await PP.platform.clearCache();
-        PP.ui.alert('キャッシュを削除しました。');
+        const cleared = await PP.platform.clearCache();
+        PP.ui.alert(cleared ? 'キャッシュを削除しました。' : 'この環境ではキャッシュを削除できませんでした。');
       } catch (error) {
         report(CATEGORY.IPC, error, { scope: 'clear-cache', message: 'キャッシュ削除に失敗しました。' });
       }

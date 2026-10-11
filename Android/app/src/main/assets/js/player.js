@@ -23,9 +23,28 @@
     order: util.byId('orderBtn'),
     shuffle: util.byId('shuffleBtn'),
     random: util.byId('randomBtn'),
+    repeat: util.byId('repeatBtn'),
+    sleepSelect: util.byId('sleepTimerSelect'),
+    sleepRemaining: util.byId('sleepTimerRemaining'),
+    osd: util.byId('osd'),
     app: util.byId('app')
   };
 
+  const REPEAT_MODES = ['off', 'all', 'one'];
+  const REPEAT_CYCLE = ['all', 'one', 'off'];
+  const REPEAT_LABELS = { off: 'リピート: オフ', all: 'リピート: 全曲', one: 'リピート: 1曲' };
+  const REPEAT_ICONS = { off: '🔁', all: '🔁', one: '🔂' };
+  const REPEAT_STORAGE_KEY = 'playerRepeat';
+  const OSD_DURATION_MS = 1600;
+  const SLEEP_FADE_MS = 4000;
+  const SLEEP_FADE_STEPS = 40;
+  const VOLUME_STEP = 0.05;
+
+  const sleep = { endAt: 0, ticker: null, afterTrack: false, token: 0 };
+
+  let repeatMode = 'all';
+  let osdTimer = null;
+  let volumeBeforeMute = 1;
   let loadToken = 0;
   let pending = null;
   let draining = false;
@@ -182,13 +201,26 @@
     return list[idx];
   }
 
+  function isLastPosition() {
+    const items = state.items;
+    if (items.length === 0) return true;
+    if (state.playMode === 'shuffle') {
+      if (!isShuffleValid()) syncShuffleOrder();
+      return state.currentIndex >= state.shuffleOrder.length - 1;
+    }
+    return state.currentIndex >= items.length - 1;
+  }
+
   function peekNextId() {
     const items = state.items;
     if (items.length === 0 || state.playMode === 'random') return null;
+    if (repeatMode === 'one' || sleep.afterTrack) return null;
     if (state.playMode === 'shuffle') {
       if (!isShuffleValid()) return null;
+      if (repeatMode === 'off' && isLastPosition()) return null;
       return state.shuffleOrder[mod(state.currentIndex + 1, state.shuffleOrder.length)] || null;
     }
+    if (repeatMode === 'off' && isLastPosition()) return null;
     return items[mod(state.currentIndex + 1, items.length)] || null;
   }
 
@@ -261,7 +293,169 @@
     if (el.stage) el.stage.classList.toggle('paused', showPaused);
     if (el.centerPlay) el.centerPlay.textContent = showPaused ? '▶' : 'Ⅱ';
     if (el.playPause) el.playPause.textContent = showPaused ? '▶' : 'Ⅱ';
-    PP.platform.reportPlaybackState({ isPlaying: !showPaused, title: currentTitle() });
+    const title = currentTitle();
+    document.title = title ? `${title} - PlayPocket` : 'PlayPocket';
+    PP.platform.reportPlaybackState({ isPlaying: !showPaused, title });
+  }
+
+  function showOsd(text) {
+    if (!el.osd || !text) return;
+    el.osd.textContent = text;
+    el.osd.classList.add('show');
+    clearTimeout(osdTimer);
+    osdTimer = setTimeout(() => el.osd.classList.remove('show'), OSD_DURATION_MS);
+  }
+
+  function loadRepeatMode() {
+    try {
+      const saved = localStorage.getItem(REPEAT_STORAGE_KEY);
+      if (REPEAT_MODES.includes(saved)) return saved;
+    } catch {}
+    return 'all';
+  }
+
+  function updateRepeatUI() {
+    if (!el.repeat) return;
+    el.repeat.textContent = REPEAT_ICONS[repeatMode];
+    el.repeat.classList.toggle('active', repeatMode !== 'off');
+    el.repeat.setAttribute('aria-pressed', repeatMode === 'off' ? 'false' : 'true');
+    el.repeat.setAttribute('aria-label', REPEAT_LABELS[repeatMode]);
+    el.repeat.title = `${REPEAT_LABELS[repeatMode]} (R)`;
+  }
+
+  function setRepeatMode(mode, announce = true) {
+    if (!REPEAT_MODES.includes(mode)) return;
+    repeatMode = mode;
+    try { localStorage.setItem(REPEAT_STORAGE_KEY, mode); } catch {}
+    updateRepeatUI();
+    engine.resetStandby();
+    if (announce) showOsd(REPEAT_LABELS[mode]);
+  }
+
+  function cycleRepeatMode() {
+    const index = REPEAT_CYCLE.indexOf(repeatMode);
+    setRepeatMode(REPEAT_CYCLE[(index + 1) % REPEAT_CYCLE.length]);
+  }
+
+  function formatRemaining(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  }
+
+  function updateSleepUI() {
+    if (!el.sleepRemaining) return;
+    if (sleep.endAt > 0) {
+      el.sleepRemaining.hidden = false;
+      el.sleepRemaining.textContent = `⏲ ${formatRemaining(sleep.endAt - Date.now())}`;
+    } else if (sleep.afterTrack) {
+      el.sleepRemaining.hidden = false;
+      el.sleepRemaining.textContent = '⏲ この曲の終わりまで';
+    } else {
+      el.sleepRemaining.hidden = true;
+      el.sleepRemaining.textContent = '';
+    }
+  }
+
+  function clearSleep(resetSelect = true) {
+    sleep.token += 1;
+    if (sleep.ticker) {
+      clearInterval(sleep.ticker);
+      sleep.ticker = null;
+    }
+    sleep.endAt = 0;
+    sleep.afterTrack = false;
+    engine.setOutputScale(1);
+    if (resetSelect && el.sleepSelect) el.sleepSelect.value = '0';
+    updateSleepUI();
+  }
+
+  function stopForSleep() {
+    engine.settleTransition();
+    state.wantPlaying = false;
+    try { videoEl().pause(); } catch {}
+    clearSleep();
+    setPlayerUIState();
+    scheduleSessionSave();
+    showOsd('スリープタイマーで停止しました');
+  }
+
+  function startSleepFade() {
+    if (sleep.ticker) {
+      clearInterval(sleep.ticker);
+      sleep.ticker = null;
+    }
+    sleep.endAt = 0;
+    const v = videoEl();
+    if (v.paused || v.ended) {
+      clearSleep();
+      return;
+    }
+    const token = ++sleep.token;
+    if (el.sleepRemaining) {
+      el.sleepRemaining.hidden = false;
+      el.sleepRemaining.textContent = '⏲ 停止します…';
+    }
+    let step = 0;
+    const timer = setInterval(() => {
+      if (token !== sleep.token) {
+        clearInterval(timer);
+        return;
+      }
+      step += 1;
+      engine.setOutputScale(1 - step / SLEEP_FADE_STEPS);
+      if (step >= SLEEP_FADE_STEPS) {
+        clearInterval(timer);
+        stopForSleep();
+      }
+    }, SLEEP_FADE_MS / SLEEP_FADE_STEPS);
+  }
+
+  function tickSleep() {
+    if (sleep.endAt <= 0) return;
+    if (sleep.endAt - Date.now() <= 0) {
+      startSleepFade();
+      return;
+    }
+    updateSleepUI();
+  }
+
+  function setSleepTimer(value) {
+    clearSleep(false);
+    if (el.sleepSelect) el.sleepSelect.value = String(value);
+    if (value === 'track') {
+      sleep.afterTrack = true;
+      engine.resetStandby();
+      showOsd('スリープタイマー: この曲の終わりで停止');
+    } else {
+      const minutes = Number(value);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        sleep.endAt = Date.now() + minutes * 60000;
+        sleep.ticker = setInterval(tickSleep, 1000);
+        showOsd(`スリープタイマー: ${minutes}分後に停止`);
+      } else {
+        if (el.sleepSelect) el.sleepSelect.value = '0';
+        showOsd('スリープタイマー: オフ');
+      }
+    }
+    updateSleepUI();
+  }
+
+  function replayCurrent() {
+    const v = videoEl();
+    state.wantPlaying = true;
+    engine.resumeContext();
+    try { v.currentTime = 0; } catch {}
+    v.play().catch((error) => {
+      if (error && error.name !== 'AbortError') log.warn('player', error);
+    });
+  }
+
+  function finishPlayback() {
+    state.wantPlaying = false;
+    PP.platform.setPresence(null);
+    setPlayerUIState();
+    updateSeekUI();
+    scheduleSessionSave();
   }
 
   function updateSeekUI() {
@@ -281,8 +475,9 @@
   }
 
   function updateAudioOnlyCard(info) {
-    if (el.audioThumb) el.audioThumb.src = util.sanitizeThumbnail(info?.thumbnail) || '';
-    if (el.audioTitle) el.audioTitle.textContent = util.displayTitle(info?.name);
+    if (el.audioThumb) el.audioThumb.src = util.sanitizeThumbnail(info?.thumbnail) || (info ? C.PLACEHOLDER_THUMB : '');
+    if (el.audioTitle) el.audioTitle.textContent = info ? util.displayTitle(info.name) : '';
+    if (el.stage) el.stage.classList.toggle('audio-track', !!info && util.isAudioMime(info.mimeType));
   }
 
   function updatePresence() {
@@ -654,6 +849,48 @@
     return v;
   }
 
+  function adjustVolume(delta) {
+    const next = applyVolume(Math.round((engine.getVolume() + delta) * 100) / 100);
+    showOsd(`音量 ${Math.round(next * 100)}%`);
+    return next;
+  }
+
+  function toggleMute(announce = true) {
+    if (engine.getVolume() > 0) {
+      volumeBeforeMute = engine.getVolume();
+      applyVolume(0);
+      if (announce) showOsd('ミュート');
+    } else {
+      const restored = applyVolume(util.clamp(volumeBeforeMute || 1, 0.05, 1));
+      if (announce) showOsd(`音量 ${Math.round(restored * 100)}%`);
+    }
+  }
+
+  function stepSpeed(direction) {
+    if (!el.speed) return;
+    const options = Array.from(el.speed.options);
+    if (options.length === 0) return;
+    const index = options.findIndex((option) => option.value === el.speed.value);
+    const next = util.clamp(index + direction, 0, options.length - 1);
+    if (next !== index) {
+      el.speed.value = options[next].value;
+      engine.setPlaybackRate(parseFloat(el.speed.value) || 1);
+      updatePresence();
+      scheduleSessionSave();
+    }
+    showOsd(`再生速度 ${options[next].textContent}`);
+  }
+
+  function seekToRatio(ratio) {
+    engine.settleTransition();
+    const v = videoEl();
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    if (duration <= 0) return;
+    v.currentTime = duration * util.clamp(ratio, 0, 1);
+    updateSeekUI();
+    scheduleSessionSave();
+  }
+
   function createVolumeControls() {
     const controls = document.querySelector('.player-controls');
     if (!controls || controls.querySelector('.volume-controls')) return;
@@ -687,14 +924,7 @@
     applyVolume(Number.isFinite(saved) ? saved : 1, { persist: false });
 
     slider.addEventListener('input', () => applyVolume(parseFloat(slider.value) || 0));
-    mute.addEventListener('click', () => {
-      if (engine.getVolume() > 0) {
-        slider.dataset.prev = String(engine.getVolume());
-        applyVolume(0);
-      } else {
-        applyVolume(util.clamp(parseFloat(slider.dataset.prev || '1') || 1, 0, 1));
-      }
-    });
+    mute.addEventListener('click', () => toggleMute(false));
 
     wrap.appendChild(mute);
     wrap.appendChild(slider);
@@ -759,6 +989,22 @@
 
   function onEnded() {
     if (engine.isTransitioning()) return;
+    if (sleep.afterTrack) {
+      state.wantPlaying = false;
+      clearSleep();
+      setPlayerUIState();
+      scheduleSessionSave();
+      showOsd('スリープタイマーで停止しました');
+      return;
+    }
+    if (repeatMode === 'one') {
+      replayCurrent();
+      return;
+    }
+    if (repeatMode === 'off' && state.playMode !== 'random' && state.items.length > 0 && isLastPosition()) {
+      finishPlayback();
+      return;
+    }
     const cfg = getTransitionConfig();
     if (cfg.enabled && !cfg.crossfade && cfg.nextTrackId && engine.isStandbyReady()) {
       state.wantPlaying = true;
@@ -872,10 +1118,15 @@
       updatePresence();
       scheduleSessionSave();
     });
+    el.repeat?.addEventListener('click', () => cycleRepeatMode());
+    el.sleepSelect?.addEventListener('change', () => setSleepTimer(el.sleepSelect.value));
     createVolumeControls();
   }
 
   function init() {
+    repeatMode = loadRepeatMode();
+    updateRepeatUI();
+    updateSleepUI();
     engine.configure({ getTransitionConfig, prepareNext });
     engine.ensureAudioGraph();
     bindEngineEvents();
@@ -961,7 +1212,14 @@
     step,
     togglePlayPause,
     seekBy,
+    seekToRatio,
     setMode,
+    cycleRepeatMode,
+    adjustVolume,
+    toggleMute,
+    stepSpeed,
+    showOsd,
+    volumeStep: VOLUME_STEP,
     toggleFullscreen,
     handleCommand,
     stopAll,

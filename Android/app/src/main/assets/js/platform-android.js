@@ -7,9 +7,11 @@
 
   const SETTINGS_KEY = 'playpocket-settings-v1';
   const SESSION_KEY = 'playpocket-session-v2';
-  const EMBEDDED_EXPORT_LIMIT_BYTES = 150 * 1024 * 1024;
+  const EMBEDDED_EXPORT_LIMIT_BYTES = 350 * 1024 * 1024;
+  const MAX_SHARED_PACKAGE_BYTES = 1 * 1024 * 1024 * 1024;
   const SAVE_CHUNK_BYTES = 384 * 1024;
   const SAVE_PICKER_TIMEOUT_MS = 10 * 60 * 1000;
+  const TRANSCODE_READY_TIMEOUT_MS = 30 * 60 * 1000;
   const TITLE_LIMIT = 200;
   const COMMANDS = new Set(['previous-track', 'next-track', 'toggle-play-pause']);
   const DESKTOP_ONLY_SETTINGS = ['rpcEnabled', 'startupLaunch', 'minimizeOnClose', 'hardwareAcceleration'];
@@ -23,6 +25,9 @@
 
   const saveWaiters = new Map();
   let saveCounter = 0;
+  const transcodeWaiters = new Map();
+  const transcodeProgressHandlers = new Map();
+  let transcodeCounter = 0;
   let lastReportedPlayback = null;
 
   function readJson(key) {
@@ -121,6 +126,19 @@
     }
   };
 
+  window.__ppOnTranscodeReady = function (id, ok, totalBytes) {
+    const resolve = transcodeWaiters.get(String(id));
+    if (resolve) {
+      transcodeWaiters.delete(String(id));
+      resolve({ ok: ok === true, totalBytes: Number(totalBytes) || 0 });
+    }
+  };
+
+  window.__ppOnTranscodeProgress = function (id, percent) {
+    const handler = transcodeProgressHandlers.get(String(id));
+    if (handler) handler(Number(percent) || 0);
+  };
+
   window.__ppClosePanels = function () {
     try {
       return !!(PP.app && PP.app.closePanels());
@@ -171,10 +189,66 @@
     }
   }
 
+  async function transcodeToMp4(file, onProgress) {
+    if (!bridge || typeof bridge.beginTranscode !== 'function') throw new Error('transcode-unsupported');
+
+    transcodeCounter += 1;
+    const id = `transcode-${Date.now().toString(36)}-${transcodeCounter}`;
+    const readyPromise = new Promise((resolve) => {
+      transcodeWaiters.set(id, resolve);
+      setTimeout(() => {
+        if (transcodeWaiters.has(id)) {
+          transcodeWaiters.delete(id);
+          resolve({ ok: false, totalBytes: 0 });
+        }
+      }, TRANSCODE_READY_TIMEOUT_MS);
+    });
+    if (typeof onProgress === 'function') transcodeProgressHandlers.set(id, onProgress);
+
+    let started = false;
+    try {
+      started = bridge.beginTranscode(id, file.name || 'video', file.size) === true;
+    } catch (error) {
+      log.warn('transcode', error);
+    }
+    if (!started) {
+      transcodeWaiters.delete(id);
+      transcodeProgressHandlers.delete(id);
+      throw new Error('transcode-unsupported');
+    }
+
+    try {
+      for (let offset = 0; offset < file.size; offset += SAVE_CHUNK_BYTES) {
+        const text = await PP.media.sliceToBase64(file.slice(offset, offset + SAVE_CHUNK_BYTES));
+        if (bridge.writeTranscodeChunk(id, text) !== true) throw new Error('transcode-write-failed');
+      }
+      if (bridge.finishTranscode(id) !== true) throw new Error('transcode-failed');
+
+      const result = await readyPromise;
+      transcodeProgressHandlers.delete(id);
+      if (!result.ok || result.totalBytes <= 0) throw new Error('transcode-failed');
+
+      const parts = [];
+      for (let offset = 0; offset < result.totalBytes; offset += SAVE_CHUNK_BYTES) {
+        const text = bridge.readTranscodeChunk(id, offset, SAVE_CHUNK_BYTES);
+        if (typeof text !== 'string' || !text) throw new Error('transcode-read-failed');
+        parts.push(PP.media.base64ToBlob(text, 'video/mp4'));
+      }
+      notifyBridge('cancelTranscode', id);
+      return new Blob(parts, { type: 'video/mp4' });
+    } catch (error) {
+      transcodeWaiters.delete(id);
+      transcodeProgressHandlers.delete(id);
+      notifyBridge('cancelTranscode', id);
+      throw error;
+    }
+  }
+
   PP.platform = Object.freeze({
     name: 'android',
     capabilities: Object.freeze({ keyboard: false, sidebar: true, fullscreenApi: true, extensionVideoFallback: true, flushOnHidden: true, renameGesture: 'dblclick' }),
     embeddedExportLimitBytes: EMBEDDED_EXPORT_LIMIT_BYTES,
+    maxSharedPackageBytes: MAX_SHARED_PACKAGE_BYTES,
 
     async loadStartup() {
       return {
@@ -255,7 +329,8 @@
       else if (session.settingsOpen === false) PP.app.closeSettings();
     },
 
-    saveFile
+    saveFile,
+    transcodeToMp4
   });
 
   if (el.menuToggle) el.menuToggle.addEventListener('click', toggleSidebar);

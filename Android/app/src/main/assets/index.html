@@ -32,7 +32,7 @@
             <ul id="playlists" class="playlists" aria-label="プレイリスト一覧"></ul>
 
             <div class="file-controls" aria-label="ファイル操作">
-                <input id="fileInput" type="file" accept="video/*" multiple />
+                <input id="fileInput" type="file" accept="video/*,audio/*,.mkv,.avi,.wmv,.flv,.mpg,.mpeg,.m2ts,.mts,.3gp,.mov,.m4v,.webm,.ogv,.mp3,.m4a,.aac,.wav,.flac,.ogg,.oga,.opus" multiple />
                 <label for="fileInput" class="btn file-label" data-icon="📁" title="ファイルを追加"><span class="btn-label">ファイルを追加</span></label>
                 <div id="dropZone" class="drop-zone" aria-hidden="false" data-icon="⇩"><span class="btn-label">ここにドラッグ＆ドロップ</span></div>
 
@@ -57,7 +57,7 @@
     <main class="main" role="main">
         <header class="topbar" role="banner">
             <button id="menuToggle" class="menu-btn" type="button" aria-label="メニューを開く">☰</button>
-            <div class="search">PlayPocket 1.5.2</div>
+            <div class="search">PlayPocket 1.5.3</div>
             <div class="modes" role="tablist" aria-label="再生モード">
                 <button id="orderBtn" class="mode active" role="tab" aria-selected="true" type="button">追加順</button>
                 <button id="shuffleBtn" class="mode" role="tab" aria-selected="false" type="button">シャッフル</button>
@@ -77,6 +77,7 @@
                             <div class="audio-only-badge">オーディオのみ再生中</div>
                         </div>
                         <button id="centerPlayBtn" class="overlay-play" type="button" aria-label="再生/一時停止">▶</button>
+                        <div id="osd" class="osd" role="status" aria-live="polite"></div>
                     </div>
 
                     <div class="seek-row" aria-label="再生位置">
@@ -103,6 +104,21 @@
                         </select>
                     </label>
 
+                    <button id="repeatBtn" class="small-btn repeat-btn active" type="button" aria-label="リピート: 全曲" aria-pressed="true" title="リピート: 全曲">🔁</button>
+
+                    <label class="sleep-label"><span class="btn-label">スリープ</span>
+                        <select id="sleepTimerSelect" aria-label="スリープタイマー">
+                            <option value="0" selected>オフ</option>
+                            <option value="15">15分</option>
+                            <option value="30">30分</option>
+                            <option value="45">45分</option>
+                            <option value="60">60分</option>
+                            <option value="90">90分</option>
+                            <option value="track">この曲の終わりまで</option>
+                        </select>
+                    </label>
+                    <span id="sleepTimerRemaining" class="sleep-remaining" hidden></span>
+
                     <button id="fullscreenBtn" class="small-btn" type="button" aria-label="全画面表示">⛶</button>
 
                     <div class="total-duration" aria-live="polite"><span class="btn-label">合計: </span><span id="totalDuration">00:00:00</span></div>
@@ -110,12 +126,34 @@
             </div>
 
             <div class="playlist-right" aria-label="トラックリスト">
+                <div class="track-tools">
+                    <input id="trackSearch" class="track-search" type="search" placeholder="トラックを検索" aria-label="トラックを検索" autocomplete="off" maxlength="80" />
+                    <select id="trackSort" class="track-sort" aria-label="トラックを並べ替え">
+                        <option value="" selected>並べ替え</option>
+                        <option value="name-asc">名前順 (A→Z)</option>
+                        <option value="name-desc">名前順 (Z→A)</option>
+                        <option value="duration-asc">短い順</option>
+                        <option value="duration-desc">長い順</option>
+                        <option value="size-asc">サイズが小さい順</option>
+                        <option value="size-desc">サイズが大きい順</option>
+                        <option value="reverse">逆順にする</option>
+                        <option value="shuffle">ランダムに並べ替える</option>
+                    </select>
+                    <span id="trackCount" class="track-count" aria-live="polite"></span>
+                </div>
                 <ul id="trackList" class="track-list" aria-label="トラック一覧"></ul>
+                <p id="trackEmpty" class="track-empty" hidden></p>
             </div>
         </section>
     </main>
 </div>
 
+<div id="dropOverlay" class="drop-overlay" aria-hidden="true">
+    <div class="drop-overlay-card">
+        <div class="drop-overlay-icon">⇩</div>
+        <div class="drop-overlay-text">ここにドロップして追加</div>
+    </div>
+</div>
 <div id="overlay" class="overlay"></div>
 <div id="shareModal" class="settings-modal share-modal" aria-hidden="true">
     <div class="settings-card share-card" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
@@ -133,7 +171,7 @@
             <div class="share-option-icon" aria-hidden="true">↗</div>
             <div class="share-option-content">
                 <h3>動画を含む共有ファイル</h3>
-                <p>受け取った人がすぐに再生できる共有パッケージ（最大 500MB）を端末に保存します。保存後、他のアプリから送信してください。</p>
+                <p>受け取った人がすぐに再生できる共有パッケージ（最大 1GB）を端末に保存します。保存後、他のアプリから送信してください。</p>
                 <button id="downloadSharePackageBtn" class="btn share-primary" type="button">共有ファイルを作成</button>
             </div>
         </section>

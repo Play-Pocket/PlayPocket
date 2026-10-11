@@ -75,6 +75,10 @@
         thumbTimer = setTimeout(() => finish(null), PROBE_THUMBNAIL_TIMEOUT_MS);
       });
       video.addEventListener('loadeddata', () => {
+        if (!video.videoWidth) {
+          finish(null);
+          return;
+        }
         try {
           video.currentTime = 0.1;
         } catch {
@@ -166,6 +170,31 @@
     return 'saved';
   }
 
+  const MP4_EXTENSIONS = new Set(['mp4', 'm4v']);
+
+  function autoTranscodeEnabled() {
+    try {
+      return PP.settings.get().autoTranscodeMp4 !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  function needsMp4Transcode(file) {
+    if (!(file instanceof File)) return false;
+    if (!PP.platform || typeof PP.platform.transcodeToMp4 !== 'function') return false;
+    if (!autoTranscodeEnabled()) return false;
+    if (PP.util.isAudioFile(file)) return false;
+    return !MP4_EXTENSIONS.has(PP.util.fileExtension(file.name));
+  }
+
+  async function transcodeToMp4(file, onProgress) {
+    if (!PP.platform || typeof PP.platform.transcodeToMp4 !== 'function') {
+      throw new Error('transcode-unsupported');
+    }
+    return PP.platform.transcodeToMp4(file, onProgress);
+  }
+
   let normMap = null;
   let normTimer = null;
 
@@ -237,6 +266,8 @@
     blobToBase64Parts,
     base64ToBlob,
     downloadBlob,
+    needsMp4Transcode,
+    transcodeToMp4,
     norm
   });
 }());

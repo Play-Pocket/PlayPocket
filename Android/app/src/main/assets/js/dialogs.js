@@ -91,5 +91,55 @@
     });
   }
 
-  PP.dialogs = Object.freeze({ promptText });
+  function progress({ title, label = '' }) {
+    const modal = document.createElement('div');
+    modal.className = 'settings-modal progress-modal open';
+    modal.setAttribute('aria-hidden', 'false');
+
+    const card = document.createElement('div');
+    card.className = 'settings-card progress-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+
+    const head = document.createElement('div');
+    head.className = 'settings-head';
+    const heading = document.createElement('h2');
+    heading.textContent = title;
+    head.appendChild(heading);
+
+    const labelEl = document.createElement('p');
+    labelEl.className = 'progress-label';
+    labelEl.textContent = label;
+
+    const track = document.createElement('div');
+    track.className = 'progress-track';
+    const bar = document.createElement('div');
+    bar.className = 'progress-bar';
+    bar.style.width = '0%';
+    track.appendChild(bar);
+
+    const percentEl = document.createElement('div');
+    percentEl.className = 'progress-percent';
+    percentEl.textContent = '0%';
+
+    card.append(head, labelEl, track, percentEl);
+    modal.appendChild(card);
+    document.body.appendChild(modal);
+
+    return {
+      setLabel(text) {
+        labelEl.textContent = text;
+      },
+      setPercent(value) {
+        const clamped = Math.max(0, Math.min(100, Math.round(value)));
+        bar.style.width = `${clamped}%`;
+        percentEl.textContent = `${clamped}%`;
+      },
+      close() {
+        modal.remove();
+      }
+    };
+  }
+
+  PP.dialogs = Object.freeze({ promptText, progress });
 }());

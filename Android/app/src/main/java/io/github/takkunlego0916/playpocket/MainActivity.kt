@@ -1,3 +1,5 @@
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package io.github.takkunlego0916.playpocket
 
 import android.Manifest
@@ -9,6 +11,8 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.util.Base64
@@ -29,8 +33,20 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
+import androidx.media3.transformer.Transformer
 import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity : AppCompatActivity() {
@@ -49,6 +65,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val saveSessions = ConcurrentHashMap<String, SaveSession>()
+
+    private class TranscodeJob(val id: String, val inputFile: File, val outputFile: File) {
+        @Volatile var inputStream: BufferedOutputStream? = null
+        @Volatile var totalInputBytes: Long = 0
+        @Volatile var finished: Boolean = false
+        @Volatile var failed: Boolean = false
+        @Volatile var outputBytes: Long = 0
+        @Volatile var progressPercent: Int = 0
+        var transformer: Transformer? = null
+        var progressRunnable: Runnable? = null
+    }
+
+    private val transcodeJobs = ConcurrentHashMap<String, TranscodeJob>()
+    private val transcodeHandler = Handler(Looper.getMainLooper())
+    private val transcodeIdPattern = Regex("^[A-Za-z0-9_-]{1,64}$")
 
     @Volatile
     private var pendingSaveId: String? = null
@@ -137,6 +168,139 @@ class MainActivity : AppCompatActivity() {
         pendingSaveId = null
         for (session in saveSessions.values.toList()) {
             closeSaveSession(session, deleteFile = true)
+        }
+    }
+
+    private fun cleanupTranscodeJob(job: TranscodeJob) {
+        transcodeJobs.remove(job.id)
+        job.progressRunnable?.let { transcodeHandler.removeCallbacks(it) }
+        job.progressRunnable = null
+        try {
+            job.inputStream?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "close transcode input failed", e)
+        }
+        job.inputStream = null
+        try {
+            if (job.inputFile.exists()) job.inputFile.delete()
+        } catch (e: Exception) {
+            Log.w(TAG, "delete transcode input failed", e)
+        }
+        try {
+            if (job.outputFile.exists()) job.outputFile.delete()
+        } catch (e: Exception) {
+            Log.w(TAG, "delete transcode output failed", e)
+        }
+    }
+
+    private fun abortAllTranscodes() {
+        for (job in transcodeJobs.values.toList()) {
+            try {
+                job.transformer?.cancel()
+            } catch (e: Exception) {
+                Log.w(TAG, "cancel transformer failed", e)
+            }
+            cleanupTranscodeJob(job)
+        }
+    }
+
+    private fun purgeStaleTranscodeFiles() {
+        try {
+            val dir = File(cacheDir, "transcode")
+            if (!dir.isDirectory) return
+            dir.listFiles()?.forEach { stale ->
+                try {
+                    if (stale.isFile) stale.delete() else stale.deleteRecursively()
+                } catch (e: Exception) {
+                    Log.w(TAG, "delete stale transcode file failed", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "purge stale transcode files failed", e)
+        }
+    }
+
+    private fun notifyTranscodeReady(id: String, ok: Boolean, totalBytes: Long) {
+        runOnUiThread {
+            if (!::webView.isInitialized) return@runOnUiThread
+            webView.evaluateJavascript(
+                "window.__ppOnTranscodeReady && window.__ppOnTranscodeReady('$id', $ok, $totalBytes);",
+                null
+            )
+        }
+    }
+
+    private fun notifyTranscodeProgress(id: String, percent: Int) {
+        runOnUiThread {
+            if (!::webView.isInitialized) return@runOnUiThread
+            webView.evaluateJavascript(
+                "window.__ppOnTranscodeProgress && window.__ppOnTranscodeProgress('$id', $percent);",
+                null
+            )
+        }
+    }
+
+    private fun startTranscodeProgressPolling(job: TranscodeJob) {
+        val runnable = object : Runnable {
+            override fun run() {
+                val currentJob = transcodeJobs[job.id] ?: return
+                if (currentJob.finished) return
+                val transformer = currentJob.transformer
+                if (transformer != null) {
+                    val holder = ProgressHolder()
+                    val state = try {
+                        transformer.getProgress(holder)
+                    } catch (e: Exception) {
+                        Transformer.PROGRESS_STATE_UNAVAILABLE
+                    }
+                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        currentJob.progressPercent = holder.progress
+                        notifyTranscodeProgress(currentJob.id, holder.progress)
+                    }
+                }
+                if (!currentJob.finished) {
+                    transcodeHandler.postDelayed(this, 400L)
+                }
+            }
+        }
+        job.progressRunnable = runnable
+        transcodeHandler.postDelayed(runnable, 400L)
+    }
+
+    private fun startTranscodeForJob(job: TranscodeJob) {
+        try {
+            val listener = object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    job.outputBytes = job.outputFile.length()
+                    job.finished = true
+                    notifyTranscodeReady(job.id, true, job.outputBytes)
+                }
+
+                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                    Log.w(TAG, "transcode failed: ${job.id}", exportException)
+                    job.failed = true
+                    job.finished = true
+                    notifyTranscodeReady(job.id, false, 0)
+                }
+            }
+
+            val transformer = Transformer.Builder(this)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .addListener(listener)
+                .build()
+            job.transformer = transformer
+
+            val mediaItem = MediaItem.fromUri(Uri.fromFile(job.inputFile))
+            val editedMediaItem = EditedMediaItem.Builder(mediaItem).build()
+            transformer.start(editedMediaItem, job.outputFile.absolutePath)
+
+            startTranscodeProgressPolling(job)
+        } catch (e: Exception) {
+            Log.w(TAG, "start transcode failed: ${job.id}", e)
+            job.failed = true
+            job.finished = true
+            notifyTranscodeReady(job.id, false, 0)
         }
     }
 
@@ -319,6 +483,109 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, R.string.save_failed, Toast.LENGTH_LONG).show()
             }
         }
+
+        @JavascriptInterface
+        fun beginTranscode(requestId: String?, fileName: String?, totalBytes: Double): Boolean {
+            val id = requestId.orEmpty()
+            if (!transcodeIdPattern.matches(id)) return false
+            if (transcodeJobs.containsKey(id)) return false
+            if (totalBytes.isNaN() || totalBytes < 0) return false
+
+            return try {
+                val dir = File(cacheDir, "transcode").apply { mkdirs() }
+                val inputFile = File(dir, "$id.in")
+                val outputFile = File(dir, "$id.mp4")
+                val job = TranscodeJob(id, inputFile, outputFile)
+                job.totalInputBytes = totalBytes.toLong()
+                job.inputStream = BufferedOutputStream(FileOutputStream(inputFile), 64 * 1024)
+                transcodeJobs[id] = job
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "begin transcode failed", e)
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun writeTranscodeChunk(id: String?, base64: String?): Boolean {
+            val job = transcodeJobs[id.orEmpty()] ?: return false
+            val stream = job.inputStream ?: return false
+            if (base64.isNullOrEmpty()) return true
+            return try {
+                stream.write(Base64.decode(base64, Base64.DEFAULT))
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "write transcode chunk failed", e)
+                cleanupTranscodeJob(job)
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun finishTranscode(id: String?): Boolean {
+            val job = transcodeJobs[id.orEmpty()] ?: return false
+            val stream = job.inputStream ?: return false
+            try {
+                stream.flush()
+                stream.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "finish transcode close failed", e)
+                cleanupTranscodeJob(job)
+                return false
+            }
+            job.inputStream = null
+            runOnUiThread { startTranscodeForJob(job) }
+            return true
+        }
+
+        @JavascriptInterface
+        fun getTranscodeStatus(id: String?): String {
+            val job = transcodeJobs[id.orEmpty()] ?: return "error:not-found"
+            return when {
+                job.failed -> "error:transcode-failed"
+                job.finished -> "done:${job.outputBytes}"
+                else -> "running:${job.progressPercent}"
+            }
+        }
+
+        @JavascriptInterface
+        fun readTranscodeChunk(id: String?, offset: Double, length: Double): String {
+            val job = transcodeJobs[id.orEmpty()] ?: return ""
+            if (!job.finished || job.failed) return ""
+            val start = offset.toLong()
+            val want = length.toLong()
+            if (start < 0 || want <= 0 || start >= job.outputBytes) return ""
+            val readLen = minOf(want, job.outputBytes - start).toInt()
+            return try {
+                RandomAccessFile(job.outputFile, "r").use { raf ->
+                    raf.seek(start)
+                    val buffer = ByteArray(readLen)
+                    var read = 0
+                    while (read < readLen) {
+                        val n = raf.read(buffer, read, readLen - read)
+                        if (n < 0) break
+                        read += n
+                    }
+                    Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "read transcode chunk failed", e)
+                ""
+            }
+        }
+
+        @JavascriptInterface
+        fun cancelTranscode(id: String?) {
+            val job = transcodeJobs[id.orEmpty()] ?: return
+            runOnUiThread {
+                try {
+                    job.transformer?.cancel()
+                } catch (e: Exception) {
+                    Log.w(TAG, "cancel transformer failed", e)
+                }
+                cleanupTranscodeJob(job)
+            }
+        }
     }
 
     private fun closeOpenPanelsIfAny(onResult: (Boolean) -> Unit) {
@@ -462,6 +729,7 @@ class MainActivity : AppCompatActivity() {
             filePathCallback?.onReceiveValue(null)
             filePathCallback = null
             abortAllSaves()
+            abortAllTranscodes()
 
             container.removeView(deadView)
             deadView.destroy()
@@ -486,6 +754,10 @@ class MainActivity : AppCompatActivity() {
 
         isDebuggableBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         WebView.setWebContentsDebuggingEnabled(isDebuggableBuild)
+
+        if (transcodeJobs.isEmpty()) {
+            purgeStaleTranscodeFiles()
+        }
 
         container = FrameLayout(this)
         container.setBackgroundColor(Color.parseColor("#121212"))
@@ -560,6 +832,7 @@ class MainActivity : AppCompatActivity() {
         filePathCallback?.onReceiveValue(null)
         filePathCallback = null
         abortAllSaves()
+        abortAllTranscodes()
         if (::webView.isInitialized) {
             webView.stopLoading()
             (webView.parent as? ViewGroup)?.removeView(webView)
