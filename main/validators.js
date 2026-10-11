@@ -8,6 +8,8 @@ const MIN_TIMESTAMP_MS = Date.UTC(2000, 0, 1);
 const MAX_TIMESTAMP_MS = Date.UTC(2100, 0, 1);
 const MAX_URL_LENGTH = 2048;
 const RPC_TEXT_LIMIT = 128;
+const MAX_FILE_PATH_LENGTH = 4096;
+const MAX_JOB_ID_LENGTH = 128;
 
 function cleanText(value, fallback) {
   if (typeof value !== 'string') return fallback;
@@ -61,10 +63,20 @@ function sanitizeExternalUrl(value) {
   return ok ? url.href : null;
 }
 
+function sanitizeTranscodeRequest(data) {
+  if (!isPlainObject(data)) return null;
+  const filePath = typeof data.filePath === 'string' ? data.filePath.trim() : '';
+  const jobId = typeof data.jobId === 'string' ? data.jobId.trim() : '';
+  if (!filePath || filePath.length > MAX_FILE_PATH_LENGTH) return null;
+  if (!jobId || jobId.length > MAX_JOB_ID_LENGTH || !/^[a-zA-Z0-9_-]+$/.test(jobId)) return null;
+  return { filePath, jobId };
+}
+
 module.exports = {
   PLAYBACK_COMMANDS,
   sanitizeRpcPayload,
   sanitizePlaybackState,
   sanitizePlaybackCommand,
-  sanitizeExternalUrl
+  sanitizeExternalUrl,
+  sanitizeTranscodeRequest
 };
