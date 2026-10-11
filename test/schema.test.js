@@ -71,6 +71,15 @@ test('sanitizeSettingsPatch keeps only valid known keys for the platform', () =>
   assert.deepEqual(Schema.sanitizeSettingsPatch(null, 'electron'), {});
 });
 
+test('autoTranscodeMp4 is a windows-only setting that defaults to on', () => {
+  assert.equal(Schema.defaultSettings('electron').autoTranscodeMp4, true);
+  assert.equal('autoTranscodeMp4' in Schema.defaultSettings('android'), false);
+  assert.equal(Schema.normalizeSettings({ autoTranscodeMp4: false }, 'electron').autoTranscodeMp4, false);
+  assert.equal(Schema.normalizeSettings({ autoTranscodeMp4: 'no' }, 'electron').autoTranscodeMp4, true);
+  assert.deepEqual(Schema.sanitizeSettingsPatch({ autoTranscodeMp4: false }, 'electron'), { autoTranscodeMp4: false });
+  assert.deepEqual(Schema.sanitizeSettingsPatch({ autoTranscodeMp4: false }, 'android'), {});
+});
+
 test('unknown platform throws', () => {
   assert.throws(() => Schema.defaultSettings('ios'));
 });
