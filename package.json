@@ -1,30 +1,29 @@
 {
   "name": "PlayPocket",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Offline playlist player (PlayPocket)",
   "main": "main.js",
-  "scripts": {
-    "start": "electron .",
-    "test": "node --test \"test/*.test.js\"",
-    "verify": "node scripts/verify-release.js",
-    "build": "node scripts/verify-release.js && electron-builder --publish never",
-    "dist": "node scripts/verify-release.js && electron-builder --publish never"
-  },
   "author": "Takkunlego0916",
   "license": "MIT",
-  "devDependencies": {
-    "electron": "^44.4.3",
-    "electron-builder": "^26.15.3"
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "verify": "node scripts/verify-release.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
   "build": {
     "appId": "io.github.takkunlego0916.playpocket",
     "productName": "PlayPocket",
-    "artifactName": "${productName}.${version}.${ext}",
     "directories": {
       "output": "dist"
     },
     "asarUnpack": [
-      "node_modules/discord-rpc/**/*"
+      "node_modules/discord-rpc/**/*",
+      "node_modules/@ffmpeg-installer/**/*"
     ],
     "npmRebuild": false,
     "files": [
@@ -38,34 +37,27 @@
       "!node_modules/register-scheme/**/*"
     ],
     "win": {
-      "target": [
-        "zip"
-      ],
-      "icon": "app/icons/appIcon.ico"
+      "target": "zip",
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}.${version}.${ext}"
     },
     "mac": {
+      "target": "dmg",
       "icon": "app/icons/appIcon.icns",
-      "target": [
-        "dmg",
-        "zip"
-      ]
+      "category": "public.app-category.music"
     },
     "linux": {
-      "icon": "app/icons",
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "Takkunlego0916",
-        "repo": "PlayPocket"
-      }
-    ]
+      "target": "AppImage",
+      "icon": "assets/icon.ico"
+    }
   },
   "dependencies": {
-    "discord-rpc": "^4.0.1"
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "discord-rpc": "^4.0.1",
+    "fluent-ffmpeg": "^2.1.3"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3"
   }
 }
