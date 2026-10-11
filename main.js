@@ -32,6 +32,26 @@ function loadDiscordRPC() {
   return RPC;
 }
 
+function resolveUnpackedBinary(binaryPath) {
+  if (typeof binaryPath !== 'string' || !binaryPath) return binaryPath;
+  const unpacked = binaryPath.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+  if (unpacked !== binaryPath && fs.existsSync(unpacked)) return unpacked;
+  return binaryPath;
+}
+
+let ffmpeg = null;
+let ffmpegAvailable = false;
+try {
+  ffmpeg = require('fluent-ffmpeg');
+  const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+  ffmpeg.setFfmpegPath(resolveUnpackedBinary(ffmpegInstaller.path));
+  ffmpegAvailable = true;
+} catch (error) {
+  log.warn('transcode', 'ffmpeg の読み込みに失敗しました。動画の自動MP4変換は利用できません。', error);
+}
+
+const MAX_TRANSCODE_OUTPUT_BYTES = 1536 * 1024 * 1024;
+
 function resolveAppDataDir() {
   if (process.platform === 'win32') {
     const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -48,6 +68,16 @@ const APP_DATA_DIR = resolveAppDataDir();
 const SETTINGS_PATH = path.join(APP_DATA_DIR, 'settings.json');
 const STATE_PATH = path.join(APP_DATA_DIR, 'state.json');
 const CACHE_DIR = path.join(APP_DATA_DIR, 'Cache');
+const TRANSCODE_TEMP_DIR = path.join(app.getPath('temp'), 'PlayPocket-transcode');
+const activeTranscodeJobs = new Map();
+
+function cleanupTranscodeTempDir() {
+  for (const job of activeTranscodeJobs.values()) {
+    try { job.command.kill('SIGKILL'); } catch {}
+  }
+  activeTranscodeJobs.clear();
+  try { fs.rmSync(TRANSCODE_TEMP_DIR, { recursive: true, force: true }); } catch {}
+}
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -377,6 +407,7 @@ function quitApp() {
   shutdownRPC();
   destroyTray();
   globalShortcut.unregisterAll();
+  cleanupTranscodeTempDir();
   flushAllStores();
   app.quit();
 }
@@ -609,6 +640,67 @@ function registerIpcHandlers() {
     await shell.openExternal(safeUrl);
     return true;
   });
+
+  ipcMain.handle(CH.TRANSCODE_TO_MP4, async (event, data) => {
+    requireMainWindowSender(event);
+    if (!ffmpegAvailable) throw new Error('transcode-unavailable');
+
+    const request = Validators.sanitizeTranscodeRequest(data);
+    if (!request) throw new Error('invalid-transcode-request');
+    if (activeTranscodeJobs.has(request.jobId)) throw new Error('duplicate-transcode-job');
+    if (!fs.existsSync(request.filePath)) throw new Error('file-not-found');
+
+    try {
+      fs.mkdirSync(TRANSCODE_TEMP_DIR, { recursive: true });
+    } catch (error) {
+      log.warn('transcode', '一時ディレクトリの作成に失敗しました', error);
+    }
+
+    const outputPath = path.join(TRANSCODE_TEMP_DIR, `${request.jobId}.mp4`);
+    const sender = event.sender;
+
+    const command = ffmpeg(request.filePath)
+      .videoCodec('libx264')
+      .outputOptions([
+        '-map', '0:v:0?',
+        '-map', '0:a:0?',
+        '-sn',
+        '-dn',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-max_muxing_queue_size', '4096',
+        '-preset', 'veryfast',
+        '-crf', '20',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart'
+      ])
+      .audioCodec('aac')
+      .audioBitrate('192k')
+      .format('mp4')
+      .on('progress', (progress) => {
+        if (sender.isDestroyed()) return;
+        const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(99, Math.round(progress.percent))) : 0;
+        sender.send(CH.TRANSCODE_PROGRESS, { jobId: request.jobId, percent });
+      });
+
+    activeTranscodeJobs.set(request.jobId, { command, outputPath });
+
+    try {
+      await new Promise((resolve, reject) => {
+        command.on('error', reject).on('end', resolve).save(outputPath);
+      });
+      const outputStat = await fs.promises.stat(outputPath);
+      if (outputStat.size > MAX_TRANSCODE_OUTPUT_BYTES) throw new Error('transcode-output-too-large');
+      const buffer = await fs.promises.readFile(outputPath);
+      if (!sender.isDestroyed()) sender.send(CH.TRANSCODE_PROGRESS, { jobId: request.jobId, percent: 100 });
+      return new Uint8Array(buffer);
+    } catch (error) {
+      log.warn('transcode', `変換に失敗しました: ${request.filePath}`, error);
+      throw new Error('transcode-failed');
+    } finally {
+      activeTranscodeJobs.delete(request.jobId);
+      fs.promises.unlink(outputPath).catch(() => {});
+    }
+  });
 }
 
 if (process.platform === 'win32') {
@@ -680,6 +772,7 @@ app.on('before-quit', () => {
   shutdownRPC();
   destroyTray();
   globalShortcut.unregisterAll();
+  cleanupTranscodeTempDir();
   flushAllStores();
 });
 
