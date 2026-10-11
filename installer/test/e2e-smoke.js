@@ -98,7 +98,7 @@ async function main() {
     return out;
   });
 
-  check('installer shows its own version', info.version === 'PlayPocket Installer v1.5.2', info.version);
+  check('installer shows its own version', info.version === 'PlayPocket Installer v1.5.3', info.version);
   check('interrupted install recovered at startup', fs.existsSync(path.join(INSTALL_DIR, 'PlayPocket.1.5.1.exe')) && !fs.existsSync(BACKUP_DIR), fs.readdirSync(path.join(LOCALAPPDATA, 'Programs')));
   check('status reports the recovered install and version', info.status.installExists === true && info.status.installedVersion === '1.5.1', info.status);
   check('drive root is rejected with a clear message', /ドライブ直下/.test(info.root), info.root);
@@ -107,7 +107,7 @@ async function main() {
   check('open missing folder is refused', /見つかりません/.test(info.open), info.open);
   check('renderer cannot navigate away', info.navigation === true, info.navigation);
   check('renderer cannot fetch external URLs', info.cspBlocksFetch === true, info.cspBlocksFetch);
-  check('preload exposes exactly the expected API', info.api === 'chooseInstallDir,getIconPath,getLaunchIntent,getStatus,getVersion,install,onProgress,openInstallDir,repair,setInstallDir,uninstall,update', info.api);
+  check('preload exposes exactly the expected API', info.api === 'cancel,checkLatest,chooseInstallDir,getIconPath,getLaunchIntent,getStatus,getVersion,install,onProgress,openInstallDir,repair,setInstallDir,uninstall,update', info.api);
 
   const realIssues = issues.filter((line) => !/example\.com|Refused to|Failed to fetch|net::ERR|Content Security Policy/i.test(line));
   check('no unexpected console errors', realIssues.length === 0, realIssues);

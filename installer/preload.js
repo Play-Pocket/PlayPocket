@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('installer', {
   repair: (payload) => ipcRenderer.invoke('installer:repair', payload),
   update: (payload) => ipcRenderer.invoke('installer:update', payload),
   uninstall: (payload) => ipcRenderer.invoke('installer:uninstall', payload),
+  checkLatest: () => ipcRenderer.invoke('installer:check-latest'),
+  cancel: () => ipcRenderer.invoke('installer:cancel'),
   onProgress: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, payload) => callback(payload);

@@ -167,3 +167,30 @@ test('json helpers: atomic write, BOM tolerance, prototype pollution and non-obj
   assert.deepEqual(await Lib.readJson(file, { fallback: true }), { fallback: true });
   assert.deepEqual(await Lib.readJson(path.join(dir, 'none.json'), { fallback: 1 }), { fallback: 1 });
 });
+
+
+test('formatBytes and formatDuration produce compact readable values', () => {
+  assert.equal(Lib.formatBytes(0), '0 B');
+  assert.equal(Lib.formatBytes(1536), '1.50 KB');
+  assert.equal(Lib.formatBytes(85 * 1024 * 1024), '85.0 MB');
+  assert.equal(Lib.formatBytes(250 * 1024 * 1024), '250 MB');
+  assert.equal(Lib.formatBytes(-1), '--');
+  assert.equal(Lib.formatBytes(NaN), '--');
+  assert.equal(Lib.formatDuration(5), '5秒');
+  assert.equal(Lib.formatDuration(65), '1分05秒');
+  assert.equal(Lib.formatDuration(3720), '1時間02分');
+  assert.equal(Lib.formatDuration(Infinity), '--');
+  assert.equal(Lib.formatDuration(-3), '--');
+});
+
+test('disk space helpers read free space from the nearest existing parent and reject shortages', async () => {
+  const dir = tempDir();
+  const missing = path.join(dir, 'a', 'b', 'c');
+  const free = await Lib.getFreeBytes(missing);
+  assert.ok(free === null || free > 0);
+  if (free !== null) {
+    assert.equal(await Lib.assertEnoughDiskSpace(missing, 1, 'テスト'), free);
+    await assert.rejects(() => Lib.assertEnoughDiskSpace(missing, free + 1024 * 1024 * 1024 * 1024, 'テスト'), /テスト.*空き容量が不足/);
+  }
+  assert.equal(await Lib.assertEnoughDiskSpace(missing, 0, 'テスト'), null);
+});

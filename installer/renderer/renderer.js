@@ -14,8 +14,45 @@ const uninstallBtn = document.getElementById('uninstallBtn');
 const browseInstallBtn = document.getElementById('browseInstall');
 const openInstallBtn = document.getElementById('openInstall');
 const versionEl = document.getElementById('installerVersion');
+const installedVersionEl = document.getElementById('installedVersion');
+const latestVersionEl = document.getElementById('latestVersion');
+const installedTimeEl = document.getElementById('installedTime');
+const installedSizeEl = document.getElementById('installedSize');
+const updateBadgeEl = document.getElementById('updateBadge');
+const checkLatestBtn = document.getElementById('checkLatestBtn');
+const cancelBtn = document.getElementById('cancelBtn');
 
 let busy = false;
+let checking = false;
+
+function formatSize(bytes) {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return '--';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatTime(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '--';
+  return new Date(ms).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function setBadge(text, kind) {
+  if (!text) {
+    updateBadgeEl.hidden = true;
+    updateBadgeEl.textContent = '';
+    updateBadgeEl.className = 'update-badge';
+    return;
+  }
+  updateBadgeEl.hidden = false;
+  updateBadgeEl.textContent = text;
+  updateBadgeEl.className = `update-badge${kind ? ` ${kind}` : ''}`;
+}
 
 function messageOf(error) {
   const raw = error && error.message ? String(error.message) : String(error || '');
@@ -30,12 +67,15 @@ function setBusy(nextBusy) {
     updateBtn,
     uninstallBtn,
     browseInstallBtn,
-    openInstallBtn
+    openInstallBtn,
+    checkLatestBtn
   ];
 
   for (const button of buttons) {
-    button.disabled = nextBusy;
+    button.disabled = nextBusy || (button === checkLatestBtn && checking);
   }
+  installDirEl.disabled = nextBusy;
+  if (!nextBusy) cancelBtn.hidden = true;
 }
 
 function setProgress(payload = {}) {
@@ -45,6 +85,8 @@ function setProgress(payload = {}) {
 
   progressTitleEl.textContent = payload.title || '待機中';
   progressDetailEl.textContent = payload.detail || '';
+  cancelBtn.hidden = !(busy && payload.cancellable === true);
+  cancelBtn.disabled = false;
 
   if (percent === null) {
     progressPercentEl.textContent = '--%';
@@ -59,7 +101,51 @@ function setProgress(payload = {}) {
 
 function setStatus(status) {
   installDirEl.value = status.installDir || '';
-  statusTextEl.textContent = status.installExists ? '準備完了' : '未作成';
+  const hasExe = Boolean(status.installedExe);
+  if (hasExe) {
+    statusTextEl.textContent = status.installedVersion ? `インストール済み v${status.installedVersion}` : 'インストール済み';
+  } else {
+    statusTextEl.textContent = status.installExists ? 'フォルダー作成済み' : '未インストール';
+  }
+  installedVersionEl.textContent = hasExe && status.installedVersion ? `v${status.installedVersion}` : (hasExe ? '不明' : '未インストール');
+  installedTimeEl.textContent = hasExe ? formatTime(status.installedTime) : '--';
+  installedSizeEl.textContent = hasExe ? formatSize(status.installedSize) : '--';
+}
+
+function applyLatest(info) {
+  installBtn.classList.remove('btn-attention');
+  updateBtn.classList.remove('btn-attention');
+  if (!info || info.ok !== true) {
+    latestVersionEl.textContent = '--';
+    setBadge(info && info.message ? `確認失敗: ${info.message}` : '', 'error');
+    return;
+  }
+  latestVersionEl.textContent = info.latestVersion ? `v${info.latestVersion}` : '不明';
+  if (!info.installed) {
+    setBadge(info.assetSize ? `インストールできます（${formatSize(info.assetSize)}）` : 'インストールできます', 'available');
+    installBtn.classList.add('btn-attention');
+  } else if (info.updateAvailable) {
+    setBadge(`新しいバージョン v${info.latestVersion} を利用できます`, 'available');
+    updateBtn.classList.add('btn-attention');
+  } else {
+    setBadge('最新です', '');
+  }
+}
+
+async function checkLatest(silent) {
+  if (checking) return;
+  checking = true;
+  checkLatestBtn.disabled = true;
+  checkLatestBtn.textContent = '確認中...';
+  try {
+    applyLatest(await window.installer.checkLatest());
+  } catch (error) {
+    if (!silent) setBadge(`確認失敗: ${messageOf(error)}`, 'error');
+  } finally {
+    checking = false;
+    checkLatestBtn.textContent = '最新版を確認';
+    checkLatestBtn.disabled = busy;
+  }
 }
 
 async function setIcon() {
@@ -134,6 +220,7 @@ async function runAction(action) {
     }
 
     await refresh();
+    checkLatest(true);
   } catch (error) {
     setProgress({
       percent: 0,
@@ -174,6 +261,15 @@ openInstallBtn.addEventListener('click', async () => {
   }
 });
 
+checkLatestBtn.addEventListener('click', () => checkLatest(false));
+
+cancelBtn.addEventListener('click', async () => {
+  cancelBtn.disabled = true;
+  try {
+    await window.installer.cancel();
+  } catch {}
+});
+
 installBtn.addEventListener('click', () => runAction('install'));
 repairBtn.addEventListener('click', () => runAction('repair'));
 updateBtn.addEventListener('click', () => runAction('update'));
@@ -210,6 +306,9 @@ window.installer.onProgress((payload) => {
     const intent = await window.installer.getLaunchIntent();
     if (intent?.autoUninstall) {
       await runAction('uninstall');
+      return;
     }
   } catch {}
+
+  checkLatest(true);
 })();

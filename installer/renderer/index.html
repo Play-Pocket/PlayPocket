@@ -45,10 +45,38 @@
         </div>
       </div>
 
+      <div class="info-card" aria-label="バージョン情報">
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="info-label">インストール済み</span>
+            <strong id="installedVersion">--</strong>
+          </div>
+          <div class="info-item">
+            <span class="info-label">最新バージョン</span>
+            <strong id="latestVersion">--</strong>
+          </div>
+          <div class="info-item">
+            <span class="info-label">ビルド日時</span>
+            <strong id="installedTime">--</strong>
+          </div>
+          <div class="info-item">
+            <span class="info-label">ファイルサイズ</span>
+            <strong id="installedSize">--</strong>
+          </div>
+        </div>
+        <div class="info-foot">
+          <span id="updateBadge" class="update-badge" hidden></span>
+          <button id="checkLatestBtn" class="btn btn-ghost" type="button">最新版を確認</button>
+        </div>
+      </div>
+
       <div class="progress-card">
         <div class="progress-head">
           <div id="progressTitle">待機中</div>
-          <div id="progressPercent">0%</div>
+          <div class="progress-head-right">
+            <div id="progressPercent">0%</div>
+            <button id="cancelBtn" class="btn btn-ghost btn-compact" type="button" hidden>キャンセル</button>
+          </div>
         </div>
         <div class="progress-track">
           <div id="progressBar" class="progress-bar"></div>
