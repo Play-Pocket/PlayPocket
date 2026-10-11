@@ -15,8 +15,8 @@ android {
         applicationId = "io.github.takkunlego0916.playpocket"
         minSdk = 23
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.5.2"
+        versionCode = 5
+        versionName = "1.5.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -50,6 +50,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation(libs.androidx.media)
+    implementation(libs.androidx.media3.transformer)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
